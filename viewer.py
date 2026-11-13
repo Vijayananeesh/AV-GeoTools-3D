@@ -1,3 +1,4 @@
+import os
 import logging
 import json
 import traceback
@@ -318,6 +319,8 @@ class SubsurfaceDock(QDockWidget):
         self._cam = None
         self._cam_info = None
         self._last_info = None
+        self._setup_path = None
+        self.btn_save = None
         self._skip_tab_draw = False
         self._table_layers = []
         self.prep = None
@@ -374,6 +377,7 @@ class SubsurfaceDock(QDockWidget):
         rv.addWidget(split, 1)
         rv.addWidget(self._build_bottom())
         self.setWidget(root)
+        self._update_title()
         self._tabs_vis_changed()                    # the 2D View and Tables tabs start closed (open them in Tools)
 
     # ------------------------------------------------------------ toolbar
@@ -391,7 +395,11 @@ class SubsurfaceDock(QDockWidget):
             b.clicked.connect(slot)
             return b
 
-        h.addWidget(tb(_ico("/mActionFileSave.svg"), "Save this setup (layers, columns, settings)", self.save_setup))
+        h.addWidget(tb(_ico("/mActionFileNew.svg"), "New: clear the scene and the chosen layers and start again", self.new_scene))
+        self.btn_save = tb(_ico("/mActionFileSave.svg"), "Save this setup (layers, columns, settings). The first time it asks for a file name; "
+                           "after that it saves to the same file.", self.save_setup)
+        h.addWidget(self.btn_save)
+        h.addWidget(tb(_ico("/mActionFileSaveAs.svg"), "Save this setup as ... (always asks for a file name)", self.save_setup_as))
         h.addWidget(tb(_ico("/mActionFileOpen.svg"), "Open a saved setup", self.open_setup))
         h.addSpacing(12)
         h.addWidget(tb(_ico("/mActionRefresh.svg"),
@@ -2775,9 +2783,23 @@ class SubsurfaceDock(QDockWidget):
         }
 
     def save_setup(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Save setup", "subsurface_setup.json", "Setup (*.json)")
+        """Save: writes to the setup file already in use (opened or saved before); asks for a file only the first time."""
+        if self._setup_path:
+            self._write_setup(self._setup_path)
+        else:
+            self.save_setup_as()
+
+    def save_setup_as(self):
+        """Save as: always asks for a file name."""
+        start = self._setup_path or "subsurface_setup.json"
+        path, _ = QFileDialog.getSaveFileName(self, "Save setup as", start, "Setup (*.json)")
         if not path:
             return
+        if not path.lower().endswith(".json"):
+            path += ".json"
+        self._write_setup(path)
+
+    def _write_setup(self, path):
         items = self._setup_items()
         out = {
             "layers": {k: (cb.currentLayer().name() if cb.currentLayer() else None) for k, cb in items["layers"].items()},
@@ -2809,9 +2831,70 @@ class SubsurfaceDock(QDockWidget):
         try:
             with open(path, "w", encoding="utf-8") as fh:
                 json.dump(out, fh, indent=2)
+            self._set_setup_path(path)
             self.say("Setup saved to " + path)
         except Exception as e:
             self.say("Could not save the setup: %s" % e, warn=True)
+
+    def new_scene(self, *args, ask=True):
+        """New: empties the 3D scene and the layer choices so a new model can be started. Layers in the QGIS project are not touched."""
+        if ask:
+            from qgis.PyQt.QtWidgets import QMessageBox
+            r = QMessageBox.question(self, "New scene",
+                                     "Clear the 3D scene, the model, the text boxes and the layers chosen here, and start a new one?\n\n"
+                                     "Your layers in the QGIS project are not removed, and your settings stay as they are. "
+                                     "Save the setup first if you want to come back to this one.")
+            if r != QMessageBox.StandardButton.Yes:
+                return
+        try:
+            for cb in (self.cb_collar, self.cb_lith, self.cb_raster, self.cb_plume, self.cb_line, self.cb_gw, self.cb_gwr, self.cb_drape):
+                cb.setLayer(None)
+            self.model = None
+            self._model_stale = False
+            self._block_entry = None
+            self.fence = None
+            self.chron.clear()
+            self.lbl_model.setText("")
+            self.layer_state = {}
+            self._drape_cache = None
+            self._clear_layers()
+            self._tb = []
+            self._tb_fill_list(-1)
+            self._tb_actors = []
+            if self.ren is not None:
+                self.ren.RemoveAllViewProps()
+                builders._drop_legend(self.ren)
+                self._registry = []
+                self.cutter = cutmod.CutController(self.ren)
+                self.cutter.attach([])
+                self._fill_cut_layers([])
+                if self.vtk_widget is not None:
+                    self.vtk_widget.GetRenderWindow().Render()
+            self._last_info = None
+            self._was_drawn = False
+            self._cam = None
+            self._setup_path = None
+            self._update_title()
+            if self.btn_save is not None:
+                self.btn_save.setToolTip("Save this setup (layers, columns, settings). The first time it asks for a file name; "
+                                         "after that it saves to the same file.")
+            self.say("New empty scene. Choose your layers on the left, then click Update model.")
+        except Exception:
+            self.say("Could not clear the scene:\n" + traceback.format_exc(limit=3), warn=True)
+
+    def _update_title(self):
+        """The title bar shows the setup file in use, or says that none is saved yet."""
+        name = os.path.basename(self._setup_path) if self._setup_path else "no setup saved yet"
+        self.setWindowTitle("AV GeoTools 3D  -  %s" % name)
+        if self._setup_path:
+            self.setToolTip("Setup file: %s" % self._setup_path)
+
+    def _set_setup_path(self, path):
+        self._setup_path = path
+        self._update_title()
+        if getattr(self, "btn_save", None) is not None:
+            import os
+            self.btn_save.setToolTip("Save the setup to %s" % os.path.basename(path))
 
     def open_setup(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open setup", "", "Setup (*.json)")
@@ -2820,6 +2903,7 @@ class SubsurfaceDock(QDockWidget):
         try:
             with open(path, encoding="utf-8") as fh:
                 cfg = json.load(fh)
+            self._set_setup_path(path)
             items = self._setup_items()
             missing = []
             for k, cb in items["layers"].items():
