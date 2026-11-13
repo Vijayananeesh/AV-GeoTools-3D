@@ -1,3 +1,4 @@
+import logging
 import json
 import traceback
 import numpy as np
@@ -24,6 +25,9 @@ G_CONC = ("conc", "concentration", "value", "result", "pfos")
 
 
 # ------------------------------------------------------------------ small helpers
+_log = logging.getLogger("av_geotools_3d")
+
+
 def _ico(name):
     return QgsApplication.getThemeIcon(name)
 
@@ -1764,6 +1768,7 @@ class SubsurfaceDock(QDockWidget):
             try:
                 v = float(tok)
             except ValueError:
+                _log.debug('Skipped a value that is not a number', exc_info=True)
                 continue
             if v > 0:
                 vals.append(v)
@@ -2279,7 +2284,7 @@ class SubsurfaceDock(QDockWidget):
                     self._orient.SetEnabled(0)
                 self.vtk_widget.Finalize()
             except Exception:
-                pass
+                _log.debug('Could not finalise the 3D widget', exc_info=True)
             self._orient = None
             self.view_layout.removeWidget(self.vtk_widget)
             self.vtk_widget.setParent(None)

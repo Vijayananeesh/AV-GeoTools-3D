@@ -1,3 +1,4 @@
+import logging
 import traceback
 from qgis.PyQt.QtCore import Qt
 try:
@@ -5,6 +6,9 @@ try:
 except ImportError:
     from qgis.PyQt.QtWidgets import QAction
 from qgis.core import QgsApplication, Qgis
+
+
+_log = logging.getLogger("av_geotools_3d")
 
 
 class Subsurface3DPlugin:
@@ -65,6 +69,6 @@ class Subsurface3DPlugin:
                 self.dock.cleanup()
                 self.iface.removeDockWidget(self.dock)
             except Exception:
-                pass
+                _log.debug('Could not remove the viewer dock while unloading', exc_info=True)
             self.dock.deleteLater()
             self.dock = None

@@ -1,3 +1,4 @@
+import logging
 import math
 import numpy as np
 from vtkmodules.util.numpy_support import numpy_to_vtk, vtk_to_numpy
@@ -23,6 +24,9 @@ STYLE = {"colours": {}, "labels": {}, "show": {}, "order": [],
          "legend": {"show": True, "title": "", "corner": "bottom-left", "scale": 1.0, "background": True, "border": False,
                "text_size": 16, "symbol_size": 14, "gap": 8, "spacing": 6, "padding": 8, "text_mode": "auto",
                "text_colour": (0.0, 0.0, 0.0), "bold": False, "italic": False, "font": "arial", "shape": "square", "dpr": 1.0}}
+
+
+_log = logging.getLogger("av_geotools_3d")
 
 
 def set_style(colours=None, labels=None, show=None, order=None, legend=None):
@@ -463,7 +467,7 @@ class _LegendOverlay:
         try:
             self._layout()
         except Exception:
-            pass
+            _log.debug('Could not refresh the layout of the legend', exc_info=True)
 
     def _layout(self):
         o = self.o
@@ -571,7 +575,7 @@ def _drop_legend(ren):
         try:
             ren.RemoveObserver(tag)
         except Exception:
-            pass
+            _log.debug('Could not remove the render observer', exc_info=True)
         ren._ss_legend_tag = None
 
 
