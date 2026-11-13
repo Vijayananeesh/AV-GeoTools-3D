@@ -5,9 +5,9 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Interactive 3D visualisation of boreholes, lithology, surfaces and soil / groundwater contaminant plumes, with plume volumes above a guideline value
 about=AV GeoTools 3D turns site-investigation data in QGIS into an interactive 3D model (VTK). It draws boreholes with lithology, a DEM with optional satellite image draped on it, groundwater surfaces and contours, geological models, fence diagrams and cut-away views. Soil results (one depth per sample) and groundwater results (screened intervals) are interpolated (kriging or inverse distance) into nested 3D plume shells, limited by the ground, the water table, the well bottoms and the well area. The volume of a plume above a guideline value is calculated in total and per lithology unit. Models can be exported as a stand-alone interactive web page (HTML), and a data-preparation tool turns Excel / CSV tables into QGIS layers. Needs the VTK, numpy and scipy modules that ship with the standard QGIS installer.
-version=0.1.1
+version=0.1.2
 author=Aneesh Vijayan
-email=Krishnanvijayananeesh@gmail.com
+email=krishnanvijayananeesh@gmail.com
 category=Analysis
 icon=icon.svg
 tags=3d,subsurface,borehole,lithology,plume,groundwater,geology,contamination,pfas,vtk
@@ -16,5 +16,6 @@ tracker=https://github.com/Vijayananeesh/AV-GeoTools-3D/issues
 repository=https://github.com/Vijayananeesh/AV-GeoTools-3D
 experimental=True
 deprecated=False
-changelog=0.1.1 - Security scan fixes: no silent error handling (errors are now logged). 2D View and Tables tabs start closed.
+changelog=0.1.2 - Contact email corrected.
+  0.1.1 - Security scan fixes: no silent error handling (errors are now logged). 2D View and Tables tabs start closed.
   0.1.0 - First release: 3D boreholes and lithology, DEM with satellite drape, groundwater surface, geological model, fence diagram, cut-away, soil and groundwater plumes, plume volume above a guideline, text boxes, HTML export, data preparation from Excel / CSV.
