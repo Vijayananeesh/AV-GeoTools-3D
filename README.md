@@ -23,8 +23,11 @@ Tools > Demo data adds example layers.
 - If you drape online imagery (Esri, Google, Bing ...), the imagery provider's terms of use apply.
 - Volumes are estimates from an interpolated plume; they are only as good as the samples behind them.
 
+## About the development
+Developed by Aneesh Vijayan, who designed the features and workflows, supplied the site-investigation know-how and tested the plugin. The code was written with the help of AI (Claude, by Anthropic). Version 0.1 has been tested on QGIS 4.2.2 with the built-in demo data; please report problems in the Issues tab.
+
 ## Licence
 GNU General Public License, version 2 or later. See LICENSE.
 
 ## Contact
-Aneesh Vijayan, Krishnanvijayananeesh@gmail.com
+Aneesh Vijayan, krishnanvijayananeesh@gmail.com
