@@ -370,6 +370,7 @@ class SubsurfaceDock(QDockWidget):
         rv.addWidget(split, 1)
         rv.addWidget(self._build_bottom())
         self.setWidget(root)
+        self._tabs_vis_changed()                    # the 2D View and Tables tabs start closed (open them in Tools)
 
     # ------------------------------------------------------------ toolbar
     def _build_toolbar(self):
@@ -2068,9 +2069,9 @@ class SubsurfaceDock(QDockWidget):
         g2.addWidget(b)
         g3 = QVBoxLayout()
         self.chk_tab2d = QCheckBox("Show the 2D View tab")
-        self.chk_tab2d.setChecked(True)
+        self.chk_tab2d.setChecked(False)
         self.chk_tabtab = QCheckBox("Show the Tables tab")
-        self.chk_tabtab.setChecked(True)
+        self.chk_tabtab.setChecked(False)
         self.chk_tab2d.toggled.connect(self._tabs_vis_changed)
         self.chk_tabtab.toggled.connect(self._tabs_vis_changed)
         g3.addWidget(self.chk_tab2d)
@@ -2904,8 +2905,8 @@ class SubsurfaceDock(QDockWidget):
                 self._shell_mode_changed()
                 self.cmb_shellcol.setCurrentIndex(max(self.cmb_shellcol.findData(builders.norm_ramp(sh.get("colours", "rainbow"))), 0))
             if "tabs" in cfg:
-                self.chk_tab2d.setChecked(bool(cfg["tabs"].get("2d", True)))
-                self.chk_tabtab.setChecked(bool(cfg["tabs"].get("tables", True)))
+                self.chk_tab2d.setChecked(bool(cfg["tabs"].get("2d", False)))
+                self.chk_tabtab.setChecked(bool(cfg["tabs"].get("tables", False)))
             if "text_boxes" in cfg:
                 self._tb = [dict(self._tb_default(), **tb) for tb in (cfg.get("text_boxes") or [])]
                 self._tb_fill_list(0)
