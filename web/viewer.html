@@ -1,0 +1,564 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>%%TITLE%%</title>
+<style>
+:root{--bg:#f4f6f9;--panel:#ffffff;--ink:#1d2733;--muted:#6b7785;--line:#dde3ea;--accent:#2563eb;--field:#f1f4f8}
+body.dark{--bg:#14171c;--panel:#1d2229;--ink:#e6eaef;--muted:#98a3b1;--line:#2c333d;--accent:#5b9cff;--field:#272d36}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;font:13px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:var(--bg)}
+#app{display:flex;height:100%}
+#side{width:320px;min-width:260px;overflow-y:auto;background:var(--panel);border-right:1px solid var(--line);padding:14px 14px 28px}
+#view{position:relative;flex:1;min-width:0;background:linear-gradient(#cce3fa,#ffffff)}
+body.dark #view{background:linear-gradient(#475167,#191c24)}
+canvas{display:block;width:100%;height:100%;outline:none}
+h1{font-size:16px;margin:0 0 2px}
+.meta{color:var(--muted);font-size:12px;margin-bottom:10px}
+h2{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:16px 0 6px}
+details{border:1px solid var(--line);border-radius:8px;margin:6px 0;background:var(--field)}
+summary{cursor:pointer;padding:7px 10px;font-weight:600;list-style:none}
+summary::-webkit-details-marker{display:none}
+summary::before{content:"\25B8";display:inline-block;width:14px;color:var(--muted)}
+details[open] summary::before{content:"\25BE"}
+.count{float:right;color:var(--muted);font-weight:400}
+.row{padding:4px 10px 6px}
+.row label{display:flex;align-items:center;gap:7px;cursor:pointer}
+.sw{width:11px;height:11px;border-radius:3px;border:1px solid rgba(0,0,0,.35);flex:none}
+.sl{display:flex;align-items:center;gap:8px;margin:2px 0 0 22px;color:var(--muted);font-size:11px}
+input[type=range]{flex:1;min-width:0;accent-color:var(--accent)}
+input[type=number],select{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:3px 6px;font:inherit}
+input[type=number]{width:92px}
+.cut{padding:8px 10px;border:1px solid var(--line);border-radius:8px;margin:6px 0;background:var(--field)}
+.cut .head{font-weight:600;display:flex;align-items:center;gap:7px}
+.cut .ctl{display:flex;gap:8px;align-items:center;margin-top:6px}
+.btn{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:5px 10px;font:inherit;cursor:pointer}
+.btn:hover{border-color:var(--accent)}
+#toolbar{position:absolute;top:10px;left:10px;display:flex;gap:6px;flex-wrap:wrap;z-index:2}
+#axl{position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:1}
+#axl div{position:absolute;transform:translate(-50%,-50%);white-space:nowrap;font:600 11px system-ui,sans-serif;color:#111;text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 4px #fff}
+#axl div.t{font-weight:700;font-size:12px;color:#0d3b8a}
+body.dark #axl div{color:#e8edf3;text-shadow:0 0 3px #000,0 0 3px #000,0 0 4px #000}
+body.dark #axl div.t{color:#9cc2ff}
+#gwl{position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:1}
+#gwl div{position:absolute;transform:translate(-50%,-50%);white-space:nowrap;font:700 11px system-ui,sans-serif;color:#06308a;background:rgba(255,255,255,.75);padding:0 3px;border-radius:3px}
+#gwl div.plab{color:#111;background:rgba(255,255,255,.7)}
+body.dark #gwl div.plab{color:#f2f2f2;background:rgba(20,24,32,.7)}
+body.dark #gwl div{color:#bcd6ff;background:rgba(20,24,32,.75)}
+#hint{position:absolute;left:50%;transform:translateX(-50%);bottom:6px;font-size:11px;color:#55606d;z-index:2;white-space:nowrap}
+#ov{position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:1}
+#ov .ovbox,#ov .ovtxt{position:absolute;white-space:pre;line-height:1.25;border-radius:4px}
+#ov.hide-leg .ovleg{display:none}
+#ov.hide-txt .ovtxt{display:none}
+body.dark #hint{color:#9aa5b3}
+#error{display:none;position:absolute;inset:40% 10% auto 10%;padding:14px;background:#fff3f3;color:#8a1f1f;border:1px solid #e3a3a3;border-radius:8px;z-index:5}
+#legend .u{display:flex;align-items:center;gap:7px;margin:2px 0}
+#bar{display:flex;gap:8px;align-items:stretch;margin-top:6px}
+#bar canvas{width:14px;height:110px;border:1px solid var(--line)}
+#barlab{display:flex;flex-direction:column;justify-content:space-between;font-size:11px;color:var(--muted)}
+.small{font-size:11px;color:var(--muted)}
+@media (max-width:760px){#app{flex-direction:column-reverse}#side{width:100%;height:42%;border-right:0;border-top:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="side">
+    <h1 id="title"></h1>
+    <div class="meta" id="meta"></div>
+    <h2>Layers</h2>
+    <div id="groups"></div>
+    <h2>Cut-away</h2>
+    <div id="cuts"></div>
+    <h2>Display</h2>
+    <div class="cut">
+      <div class="ctl"><span>Vertical exaggeration</span><input type="number" id="ve" min="0.1" max="100" step="0.5"></div>
+      <div class="ctl"><label><input type="checkbox" id="chk-labels" checked> Borehole labels</label></div>
+      <div class="ctl"><label><input type="checkbox" id="chk-box" checked> Box and grid</label></div>
+      <div class="ctl"><label><input type="checkbox" id="chk-leg" checked> Legends</label></div>
+      <div class="ctl"><label><input type="checkbox" id="chk-txt" checked> Text boxes</label></div>
+    </div>
+    <div class="small" style="margin-top:18px">Exported from the Subsurface 3D Modeller (QGIS plugin). The model is an estimate between boreholes. Works offline: no internet needed.</div>
+  </div>
+  <div id="view">
+    <canvas id="c" tabindex="0"></canvas>
+    <div id="axl"></div>
+    <div id="gwl"></div>
+    <div id="toolbar">
+      <button class="btn" data-view="iso">3D</button><button class="btn" data-view="top">Top</button><button class="btn" data-view="south">South</button><button class="btn" data-view="west">West</button>
+      <button class="btn" id="btn-theme">Dark / light</button><button class="btn" id="btn-png">Save picture</button><button class="btn" id="btn-full">Full screen</button>
+    </div>
+    <div id="hint">Left-drag rotate &middot; right-drag pan &middot; wheel zoom</div>
+    <div id="error"></div>
+  </div>
+</div>
+<script id="data" type="application/json">%%DATA%%</script>
+<script id="lib-core" type="text/plain">%%LIB_CORE%%</script>
+<script id="lib-module" type="text/plain">%%LIB_MODULE%%</script>
+<script id="lib-orbit" type="text/plain">%%LIB_ORBIT%%</script>
+<script type="module">
+const $ = (s) => document.querySelector(s);
+const D = JSON.parse($('#data').textContent);
+
+function b64(str, Type) {
+  const bin = atob(str);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return new Type(u8.buffer);
+}
+function fail(msg) {
+  const e = $('#error'); e.style.display = 'block'; e.textContent = msg;
+}
+
+async function boot() {
+  try {
+    const dec = (id) => new TextDecoder().decode(b64($('#' + id).textContent.trim(), Uint8Array));
+    const url = (txt) => URL.createObjectURL(new Blob([txt], { type: 'text/javascript' }));
+    const coreURL = url(dec('lib-core'));
+    const modURL = url(dec('lib-module').replace(/(['"])\.\/three\.core\.js\1/g, (m, q) => q + coreURL + q));
+    const orbURL = url(dec('lib-orbit').replace(/(['"])three\1/g, (m, q) => q + modURL + q));
+    const THREE = await import(modURL);
+    const { OrbitControls } = await import(orbURL);
+    start(THREE, OrbitControls);
+  } catch (e) {
+    console.error(e);
+    fail('The 3D viewer could not start (' + e.message + '). A recent browser with WebGL is needed.');
+  }
+}
+
+function start(THREE, OrbitControls) {
+  THREE.ColorManagement.enabled = false;           // show the colours exactly as in the plugin
+  const view = $('#view'), canvas = $('#c');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: true });
+  renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+  renderer.setClearColor(0x000000, 0);
+  renderer.localClippingEnabled = true;
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(40, 1, 0.01, 1e7);
+  camera.up.set(0, 1, 0);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+  const l1 = new THREE.DirectionalLight(0xffffff, 1.3); l1.position.set(1, 2, 1.5); scene.add(l1);
+  const l2 = new THREE.DirectionalLight(0xffffff, 0.6); l2.position.set(-1.5, 0.8, -1); scene.add(l2);
+  const controls = new OrbitControls(camera, canvas);
+  controls.enableDamping = true; controls.dampingFactor = 0.12;
+  controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN };
+  controls.screenSpacePanning = true;
+
+  const root = new THREE.Group(); scene.add(root);
+  const labels = new THREE.Group(); scene.add(labels);
+  const items = [];
+  let ve = D.ve;
+
+  // ---------------------------------------------------------------- elements
+  for (const e of D.elements) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(b64(e.positions, Float32Array), 3));
+    if (e.normals) g.setAttribute('normal', new THREE.BufferAttribute(b64(e.normals, Float32Array), 3));
+    if (e.colors) g.setAttribute('color', new THREE.BufferAttribute(b64(e.colors, Uint8Array), 4, true));
+    if (e.uv) g.setAttribute('uv', new THREE.BufferAttribute(b64(e.uv, Float32Array), 2));
+    if (e.indices) g.setIndex(new THREE.BufferAttribute(b64(e.indices, e.idx16 ? Uint16Array : Uint32Array), 1));
+    const col = new THREE.Color(e.color[0], e.color[1], e.color[2]);
+    let obj, mat;
+    if (e.kind === 'lines') {
+      mat = new THREE.LineBasicMaterial({ color: col });
+      obj = new THREE.LineSegments(g, mat);
+    } else {
+      if (!e.normals) g.computeVertexNormals();
+      mat = new THREE.MeshStandardMaterial({ color: e.colors ? 0xffffff : col, vertexColors: !!e.colors,
+        roughness: 0.85, metalness: 0.0, side: THREE.DoubleSide });
+      if (e.tex) { const tx = new THREE.TextureLoader().load(e.tex); tx.colorSpace = THREE.SRGBColorSpace; tx.anisotropy = 8; mat.map = tx; mat.color.set(0xffffff); mat.needsUpdate = true; }
+      obj = new THREE.Mesh(g, mat);
+    }
+    root.add(obj);
+    const it = { e, obj, mat, t: Math.round((1 - e.opacity) * 100) };
+    obj.visible = e.visible;
+    items.push(it);
+    setTransparency(it, it.t);
+  }
+  function setTransparency(it, t) {
+    it.t = t;
+    const o = 1 - t / 100;
+    it.mat.opacity = o; it.mat.transparent = o < 0.999; it.mat.depthWrite = o >= 0.999; it.mat.needsUpdate = true;
+  }
+
+  // ---------------------------------------------------------------- layer panel
+  const groupsEl = $('#groups');
+  for (const gr of D.groups) {
+    const list = items.filter((i) => i.e.group === gr.id);
+    if (!list.length) continue;
+    const det = document.createElement('details');
+    if (gr.open) det.open = true;
+    const sum = document.createElement('summary');
+    sum.textContent = gr.title;
+    const cnt = document.createElement('span'); cnt.className = 'count'; cnt.textContent = list.length; sum.appendChild(cnt);
+    det.appendChild(sum);
+    det.dataset.gid = gr.id;
+    for (const it of list) {
+      const row = document.createElement('div'); row.className = 'row';
+      const lab = document.createElement('label');
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = it.obj.visible;
+      cb.onchange = () => { it.obj.visible = cb.checked; };
+      lab.appendChild(cb);
+      if (it.e.swatch) { const sw = document.createElement('span'); sw.className = 'sw'; sw.style.background = it.e.swatch; lab.appendChild(sw); }
+      const nm = document.createElement('span'); nm.textContent = it.e.label; lab.appendChild(nm);
+      row.appendChild(lab);
+      if (it.e.fade) {
+        const sl = document.createElement('div'); sl.className = 'sl';
+        const t = document.createElement('span'); t.textContent = 'Transparency';
+        const r = document.createElement('input'); r.type = 'range'; r.min = 0; r.max = 100; r.value = it.t;
+        const v = document.createElement('span'); v.textContent = it.t + '%'; v.style.minWidth = '30px';
+        r.oninput = () => { setTransparency(it, +r.value); v.textContent = r.value + '%'; };
+        sl.append(t, r, v); row.appendChild(sl);
+      }
+      det.appendChild(row);
+    }
+    groupsEl.appendChild(det);
+  }
+
+  // ---------------------------------------------------------------- labels placed in 3D (e.g. groundwater contour labels)
+  const gwl = $('#gwl');
+  function flatLabel(text, st, h) {
+    const px = 64, cv = document.createElement('canvas'), g = cv.getContext('2d');
+    const font = (st && st.bold ? '700 ' : '700 ') + px + 'px ' + ((st && st.font) || 'Arial, sans-serif');
+    g.font = font; const w = Math.ceil(g.measureText(text).width) + 20; cv.width = w; cv.height = px + 20;
+    const g2 = cv.getContext('2d'); g2.font = font; g2.fillStyle = 'rgba(255,255,255,0.7)'; g2.fillRect(0, 0, cv.width, cv.height);
+    g2.fillStyle = '#06308a'; g2.textBaseline = 'middle'; g2.textAlign = 'center'; g2.fillText(text, cv.width / 2, cv.height / 2 + 2);
+    const tex = new THREE.CanvasTexture(cv); tex.anisotropy = 4;
+    const geo = new THREE.PlaneGeometry(h * cv.width / cv.height, h); geo.rotateX(-Math.PI / 2);
+    return new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide, depthWrite: false }));
+  }
+  const labelSets = (D.labels3d || []).map((ls) => {
+    const group = ls.flat ? new THREE.Group() : document.createElement('div');
+    if (ls.flat) root.add(group); else gwl.appendChild(group);
+    const st = ls.style;
+    if (ls.flat) {
+      ls.items.forEach((it, i) => { const m = flatLabel(it.t, ls.style, ls.h || 5); const o = new THREE.Object3D(); o.position.set(it.x, it.y, it.z); o.rotation.y = (ls.angles ? ls.angles[i] : 0) * Math.PI / 180; o.add(m); group.add(o); });
+    }
+    const els = ls.flat ? [] : ls.items.map((it) => { const el = document.createElement('div'); el.textContent = it.t; group.appendChild(el);
+      if (st) {
+        el.className = 'plab'; el.style.fontSize = st.size + 'px'; el.style.fontFamily = st.font;
+        el.style.fontWeight = st.bold ? '700' : '400'; el.style.fontStyle = st.italic ? 'italic' : 'normal';
+        if (!st.auto) el.style.color = st.color;
+        if (!st.background) el.style.background = 'none';
+        el.style.transform = 'translate(' + (st.offset || 0) + 'px, calc(-50% - ' + (st.offset || 0) + 'px))';
+      } return { el, pos: new THREE.Vector3(it.x, it.y, it.z), y0: it.y }; });
+    let det = [...groupsEl.querySelectorAll('details')].find((x) => x.dataset.gid === ls.group);
+    if (!det) {
+      const gr = D.groups.find((g) => g.id === ls.group) || { title: ls.group };
+      det = document.createElement('details'); det.dataset.gid = ls.group;
+      const sum = document.createElement('summary'); sum.textContent = gr.title; det.appendChild(sum); groupsEl.appendChild(det);
+    }
+    const row = document.createElement('div'); row.className = 'row';
+    const lab = document.createElement('label'); const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = ls.visible;
+    const nm = document.createElement('span'); nm.textContent = ls.name; lab.append(cb, nm); row.appendChild(lab); det.appendChild(row);
+    const set = { group, els, on: ls.visible };
+    const showSet = (on) => { if (ls.flat) group.visible = on; else group.style.display = on ? 'block' : 'none'; };
+    showSet(ls.visible);
+    cb.onchange = () => { set.on = cb.checked; showSet(cb.checked); };
+    return set;
+  });
+  const lv = new THREE.Vector3();
+  function drawLabels3d() {
+    if (!labelSets.length) return;
+    const W = view.clientWidth, H = view.clientHeight, k = ve / D.ve;
+    for (const set of labelSets) {
+      if (!set.on) continue;
+      for (const l of set.els) {
+        lv.set(l.pos.x, l.y0 * k, l.pos.z).project(camera);
+        if (lv.z > 1 || lv.z < -1 || Math.abs(lv.x) > 1.05 || Math.abs(lv.y) > 1.05) { l.el.style.display = 'none'; continue; }
+        l.el.style.display = 'block'; l.el.style.left = ((lv.x * 0.5 + 0.5) * W).toFixed(1) + 'px'; l.el.style.top = ((-lv.y * 0.5 + 0.5) * H).toFixed(1) + 'px';
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- cut planes
+  const axes = [
+    { name: 'Easting (X)', pos: 'Keep the east side', neg: 'Keep the west side' },
+    { name: 'Northing (Y)', pos: 'Keep the north side', neg: 'Keep the south side' },
+    { name: 'Elevation', pos: 'Keep above', neg: 'Keep below' },
+  ];
+  const cut = axes.map((a, i) => ({ on: false, keep: 1, lo: D.ranges[i][0], hi: D.ranges[i][1], value: (D.ranges[i][0] + D.ranges[i][1]) / 2 }));
+  function planeFor(i) {
+    const c = cut[i], s = c.keep;
+    let n, p;
+    if (i === 0) { n = new THREE.Vector3(s, 0, 0); p = c.value - D.origin[0]; return new THREE.Plane(n, -s * p); }
+    if (i === 1) { n = new THREE.Vector3(0, 0, -s); p = -(c.value - D.origin[1]); return new THREE.Plane(n, -(-s) * p); }
+    n = new THREE.Vector3(0, s, 0); p = (c.value - D.origin[2]) * ve; return new THREE.Plane(n, -s * p);
+  }
+  function applyClip() {
+    const act = [];
+    cut.forEach((c, i) => { if (c.on) act.push(planeFor(i)); });
+    for (const it of items) { it.mat.clippingPlanes = act; it.mat.needsUpdate = true; }
+  }
+  const cutsEl = $('#cuts');
+  axes.forEach((a, i) => {
+    const c = cut[i];
+    const box = document.createElement('div'); box.className = 'cut';
+    const head = document.createElement('label'); head.className = 'head';
+    const cb = document.createElement('input'); cb.type = 'checkbox';
+    head.append(cb, document.createTextNode('Cut at ' + a.name));
+    const ctl = document.createElement('div'); ctl.className = 'ctl';
+    const r = document.createElement('input'); r.type = 'range'; r.min = 0; r.max = 1000; r.value = 500;
+    const num = document.createElement('input'); num.type = 'number'; num.step = Math.max((c.hi - c.lo) / 100, 0.1);
+    num.value = c.value.toFixed(1);
+    ctl.append(r, num);
+    const sel = document.createElement('select');
+    sel.innerHTML = '<option value="1"></option><option value="-1"></option>';
+    sel.options[0].textContent = a.pos; sel.options[1].textContent = a.neg;
+    const ctl2 = document.createElement('div'); ctl2.className = 'ctl'; ctl2.appendChild(sel);
+    box.append(head, ctl, ctl2); cutsEl.appendChild(box);
+    const upd = () => { applyClip(); };
+    cb.onchange = () => { c.on = cb.checked; upd(); };
+    sel.onchange = () => { c.keep = +sel.value; upd(); };
+    r.oninput = () => { c.value = c.lo + (c.hi - c.lo) * (+r.value) / 1000; num.value = c.value.toFixed(1); upd(); };
+    num.onchange = () => { c.value = Math.min(Math.max(+num.value, c.lo), c.hi); r.value = Math.round(1000 * (c.value - c.lo) / ((c.hi - c.lo) || 1)); num.value = c.value.toFixed(1); upd(); };
+  });
+  const bt = document.createElement('button'); bt.className = 'btn'; bt.textContent = 'Remove all cuts';
+  bt.onclick = () => { cutsEl.querySelectorAll('input[type=checkbox]').forEach((x) => { x.checked = false; }); cut.forEach((c) => { c.on = false; }); applyClip(); };
+  cutsEl.appendChild(bt);
+
+  // ---------------------------------------------------------------- box, grid, labels
+  const bb = D.bounds;
+  const boxGrp = new THREE.Group(); root.add(boxGrp);
+  const b3 = new THREE.Box3(new THREE.Vector3(bb[0], bb[2], bb[4]), new THREE.Vector3(bb[1], bb[3], bb[5]));
+  boxGrp.add(new THREE.Box3Helper(b3, 0x7a8696));
+  const span = Math.max(bb[1] - bb[0], bb[5] - bb[4], 1);
+  const grid = new THREE.GridHelper(span * 1.15, 12, 0x9aa6b5, 0xc3ccd8);
+  grid.position.set((bb[0] + bb[1]) / 2, bb[2], (bb[4] + bb[5]) / 2); boxGrp.add(grid);
+  const diag = Math.hypot(bb[1] - bb[0], bb[3] - bb[2], bb[5] - bb[4]) || 1;
+  function labelSprite(text, big) {
+    const c = document.createElement('canvas'); c.width = 320; c.height = 72;
+    const g = c.getContext('2d'); g.font = (big ? 'bold 34px' : '600 30px') + ' system-ui,sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.lineWidth = 8; g.lineJoin = 'round'; g.lineCap = 'round'; g.miterLimit = 2; g.strokeStyle = 'rgba(255,255,255,0.92)'; g.strokeText(text, 160, 36); g.fillStyle = big ? '#0d3b8a' : '#111'; g.fillText(text, 160, 36);
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false, transparent: true }));
+    const h = diag * (big ? 0.036 : 0.030); sp.scale.set(h * 320 / 72, h, 1); sp.renderOrder = 10; return sp;
+  }
+  const holeSprites = D.holes.map((h) => { const s = labelSprite(h.id); s.userData.y = h.y; s.position.set(h.x, h.y, h.z); labels.add(s); return s; });
+  function placeLabels() { holeSprites.forEach((s) => { s.position.y = s.userData.y * ve / D.ve + diag * 0.025; }); }
+  placeLabels();
+
+  // ---- axis labels with real coordinates, on the box edges nearest the camera.
+  // They are HTML text, projected onto the picture every frame and kept inside it, so they never disappear.
+  const axl = $('#axl');
+  function niceTicks(lo, hi, n) {
+    const span = Math.max(hi - lo, 1e-9), raw = span / n, mag = Math.pow(10, Math.floor(Math.log10(raw))), norm = raw / mag;
+    const step = (norm < 1.5 ? 1 : norm < 3.5 ? 2 : norm < 7.5 ? 5 : 10) * mag;
+    const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-6; v += step) out.push(v);
+    return { ticks: out, step };
+  }
+  const fmt = (v, step) => step >= 1 ? Math.round(v).toString() : v.toFixed(Math.min(4, Math.max(0, -Math.floor(Math.log10(step)))));
+  const tE = niceTicks(D.ranges[0][0], D.ranges[0][1], 5), tN = niceTicks(D.ranges[1][0], D.ranges[1][1], 5), tZ = niceTicks(D.ranges[2][0], D.ranges[2][1], 5);
+  const axisLabels = [];
+  function addAxis(text, kind, value, title) {
+    const el = document.createElement('div'); el.textContent = text; if (title) el.className = 't'; axl.appendChild(el);
+    axisLabels.push({ el, kind, value, pos: new THREE.Vector3() });
+  }
+  tE.ticks.forEach((v) => addAxis(fmt(v, tE.step), 'E', v, false));
+  tN.ticks.forEach((v) => addAxis(fmt(v, tN.step), 'N', v, false));
+  tZ.ticks.forEach((v) => addAxis(fmt(v, tZ.step), 'Z', v, false));
+  addAxis('Easting (m)', 'Et', 0, true); addAxis('Northing (m)', 'Nt', 0, true); addAxis('Elevation (m)', 'Zt', 0, true);
+  const side = { x: 1, z: 1 };
+  function placeAxis() {
+    const k = ve / D.ve, pad = diag * 0.04;
+    const xEdge = side.x > 0 ? bb[1] : bb[0], zEdge = side.z > 0 ? bb[5] : bb[4];
+    const xFar = side.x > 0 ? bb[0] : bb[1];
+    const yb = bb[2] * k, ytop = bb[3] * k;
+    for (const s of axisLabels) {
+      const { kind, value, pos } = s;
+      if (kind === 'E') pos.set(value - D.origin[0], yb, zEdge + side.z * pad);
+      else if (kind === 'N') pos.set(xEdge + side.x * pad, yb, -(value - D.origin[1]));
+      else if (kind === 'Z') pos.set(xFar - side.x * pad, (value - D.origin[2]) * ve, zEdge + side.z * pad);
+      else if (kind === 'Et') pos.set((bb[0] + bb[1]) / 2, yb, zEdge + side.z * pad * 2.8);
+      else if (kind === 'Nt') pos.set(xEdge + side.x * pad * 3.6, yb, (bb[4] + bb[5]) / 2);
+      else if (kind === 'Zt') pos.set(xFar - side.x * pad * 3.6, (yb + ytop) / 2, zEdge + side.z * pad * 2.0);
+    }
+  }
+  function updateSide() {
+    const nx = camera.position.x > (bb[0] + bb[1]) / 2 ? 1 : -1, nz = camera.position.z > (bb[4] + bb[5]) / 2 ? 1 : -1;
+    if (nx !== side.x || nz !== side.z) { side.x = nx; side.z = nz; placeAxis(); }
+  }
+  const tmpV = new THREE.Vector3();
+  function drawAxis() {
+    if (!axl.style.display || axl.style.display !== 'none') {
+      const W = view.clientWidth, H = view.clientHeight;
+      for (const s of axisLabels) {
+        tmpV.copy(s.pos).project(camera);
+        let nx = tmpV.x, ny = tmpV.y;
+        if (tmpV.z > 1) {                                  // behind the camera: show it at the edge of the picture, pointing the way
+          nx = -nx; ny = -ny; const m = Math.max(Math.abs(nx), Math.abs(ny)) || 1; nx /= m; ny /= m;
+        }
+        let x = (nx * 0.5 + 0.5) * W, y = (-ny * 0.5 + 0.5) * H;
+        x = Math.min(Math.max(x, 34), W - 34); y = Math.min(Math.max(y, 50), H - 26);    // keep inside the picture
+        s.el.style.display = 'block'; s.el.style.left = x.toFixed(1) + 'px'; s.el.style.top = y.toFixed(1) + 'px';
+      }
+    }
+  }
+  controls.addEventListener('change', updateSide);
+  placeAxis();
+  $('#chk-labels').onchange = (ev) => { labels.visible = ev.target.checked; };
+  $('#chk-box').onchange = (ev) => { boxGrp.visible = ev.target.checked; axl.style.display = ev.target.checked ? 'block' : 'none'; };
+  const veEl = $('#ve'); veEl.value = D.ve;
+  veEl.onchange = () => { ve = Math.max(0.1, +veEl.value || D.ve); root.scale.y = ve / D.ve; placeLabels(); placeAxis(); applyClip(); };
+
+  // ---------------------------------------------------------------- legends and text boxes on the view
+  const OV = D.overlay || {};
+  const FONTS = { arial: 'Arial, Helvetica, sans-serif', times: "'Times New Roman', Times, serif", courier: "'Courier New', Courier, monospace" };
+  const ovRoot = document.createElement('div'); ovRoot.id = 'ov'; view.appendChild(ovRoot);
+  const isDark = () => document.body.classList.contains('dark');
+  const inkRGB = (mode, colour) => mode === 'custom' ? colour : (isDark() ? [0.95, 0.95, 0.95] : [0.08, 0.08, 0.10]);
+  const cssRGB = (c) => 'rgb(' + c.map((v) => Math.round(v * 255)).join(',') + ')';
+  const boxBg = (ink, op) => (0.299 * ink[0] + 0.587 * ink[1] + 0.114 * ink[2]) < 0.5 ? 'rgba(255,255,255,' + op + ')' : 'rgba(13,15,20,' + op + ')';
+  function place(el, pos, m, topExtra) {
+    const p = String(pos || 'right').replace('-', '_'), s = el.style;
+    const left = p.endsWith('left'), right = p.endsWith('right'), top = p.startsWith('top'), bottom = p.startsWith('bottom');
+    let tx = 0, ty = 0;
+    if (left) s.left = m + 'px'; else if (right) s.right = m + 'px'; else { s.left = '50%'; tx = -50; }
+    if (top) s.top = (m + (left ? topExtra : 0)) + 'px'; else if (bottom) s.bottom = m + 'px'; else { s.top = '50%'; ty = -50; }
+    if (tx || ty) s.transform = 'translate(' + tx + '%,' + ty + '%)';
+  }
+  function rampAt(t) {
+    const r = D.plume.ramp, n = r.length - 1, x = Math.min(Math.max(t, 0), 1) * n, i = Math.min(Math.floor(x), n - 1), f = x - i;
+    return r[i].map((v, k) => v + (r[i + 1][k] - v) * f);
+  }
+  function buildOverlay() {
+    ovRoot.innerHTML = '';
+    const vw = view.clientWidth || 800, vh = view.clientHeight || 600;
+    const o = OV.lith;
+    if (o && o.show && D.units.length) {
+      const k = +o.scale || 1, ink = inkRGB(o.text_mode === 'custom' ? 'custom' : 'auto', o.text_colour || [0, 0, 0]);
+      const box = document.createElement('div'); box.className = 'ovbox ovleg';
+      box.style.fontFamily = FONTS[o.font] || FONTS.arial; box.style.fontSize = (o.text_size * k) + 'px';
+      box.style.fontWeight = o.bold ? '700' : '400'; box.style.fontStyle = o.italic ? 'italic' : 'normal';
+      box.style.padding = (o.padding * k) + 'px'; box.style.color = cssRGB(ink);
+      if (o.background) box.style.background = boxBg(ink, 0.8);
+      if (o.border) box.style.border = '1px solid ' + cssRGB(ink);
+      if (o.title) { const t = document.createElement('div'); t.textContent = o.title; t.style.fontWeight = '700'; box.appendChild(t); }
+      D.units.forEach((u, i) => {
+        const row = document.createElement('div'); row.style.display = 'flex'; row.style.alignItems = 'center';
+        row.style.gap = (o.gap * k) + 'px'; row.style.marginTop = (i || o.title ? o.spacing * k : 0) + 'px';
+        const sw = document.createElement('span'); const sz = (o.symbol_size || 14) * k;
+        sw.style.cssText = 'display:inline-block;flex:none;width:' + sz + 'px;height:' + sz + 'px;background:' + u.color + ';border:1px solid rgba(0,0,0,.4);border-radius:' + (o.shape === 'circle' ? '50%' : '2px');
+        const tx = document.createElement('span'); tx.textContent = u.name; tx.style.color = o.text_mode === 'unit' ? u.color : cssRGB(ink);
+        row.append(sw, tx); box.appendChild(row);
+      });
+      place(box, o.corner || 'bottom-left', 12, 44); ovRoot.appendChild(box);
+    }
+    const p = OV.plume;
+    if (D.plume && p && p.show !== false) {
+      const vert = p.orientation !== 'horizontal', ink = inkRGB(p.mode, p.colour || [0, 0, 0]);
+      const len = Math.max(10, Math.min(100, p.length || 50)) / 100 * (vert ? vh : vw) * 0.9;
+      const th = Math.max(8, Math.round(Math.max(1, Math.min(15, p.thickness || 3)) / 100 * vw));
+      const box = document.createElement('div'); box.className = 'ovbox ovleg';
+      box.style.fontFamily = FONTS[p.font] || FONTS.arial; box.style.fontWeight = p.bold ? '700' : '400';
+      box.style.fontStyle = p.italic ? 'italic' : 'normal'; box.style.color = cssRGB(ink); box.style.padding = '6px 8px';
+      if (p.background) box.style.background = boxBg(ink, 0.7);
+      if (p.border) box.style.border = '1px solid ' + cssRGB(ink);
+      const t = document.createElement('div'); t.textContent = D.plume.title || 'Concentration';
+      t.style.fontSize = (p.title_size || 14) + 'px'; t.style.fontWeight = '700'; t.style.marginBottom = '4px'; box.appendChild(t);
+      const body = document.createElement('div'); body.style.cssText = 'display:flex;gap:6px;flex-direction:' + (vert ? 'row' : 'column');
+      const cv = document.createElement('canvas'); const cw = vert ? th : Math.round(len), ch = vert ? Math.round(len) : th;
+      cv.width = cw; cv.height = ch; cv.style.width = cw + 'px'; cv.style.height = ch + 'px'; cv.style.border = '1px solid ' + cssRGB(ink);
+      const g = cv.getContext('2d'), steps = (p.steps || 0) >= 2 ? p.steps : 0;
+      if (steps) {
+        for (let s = 0; s < steps; s++) {
+          g.fillStyle = cssRGB(rampAt((s + 0.5) / steps));
+          if (vert) g.fillRect(0, ch * (1 - (s + 1) / steps), cw, ch / steps + 1); else g.fillRect(cw * s / steps, 0, cw / steps + 1, ch);
+        }
+      } else {
+        const gr = vert ? g.createLinearGradient(0, ch, 0, 0) : g.createLinearGradient(0, 0, cw, 0);
+        const n = D.plume.ramp.length - 1; D.plume.ramp.forEach((c, i) => gr.addColorStop(i / n, cssRGB(c)));
+        g.fillStyle = gr; g.fillRect(0, 0, cw, ch);
+      }
+      const lab = document.createElement('div'); lab.style.cssText = 'display:flex;justify-content:space-between;font-size:' + (p.label_size || 12) + 'px;' +
+        (vert ? 'flex-direction:column;height:' + ch + 'px' : 'width:' + cw + 'px');
+      const n = Math.max(2, p.labels || 5), dec = p.decimals;
+      for (let j = 0; j < n; j++) {
+        const f = j / (n - 1), val = vert ? D.plume.max - (D.plume.max - D.plume.min) * f : D.plume.min + (D.plume.max - D.plume.min) * f;
+        const s = document.createElement('span'); s.textContent = dec >= 0 ? val.toFixed(dec) : String(+val.toPrecision(3)); lab.appendChild(s);
+      }
+      body.append(cv, lab); box.appendChild(body); place(box, p.position || 'right', 12, 44); ovRoot.appendChild(box);
+    }
+    (OV.texts || []).forEach((tb) => {
+      const ink = inkRGB(tb.mode, tb.colour || [0, 0, 0]), el = document.createElement('div'); el.className = 'ovtxt';
+      const s = el.style, a = tb.anchor || 'top_left', m = +tb.margin, nx = +tb.nx, ny = +tb.ny; let tx = 0, ty = 0;
+      s.fontFamily = FONTS[tb.font] || FONTS.arial; s.fontSize = tb.size + 'px'; s.fontWeight = tb.bold ? '700' : '400';
+      s.fontStyle = tb.italic ? 'italic' : 'normal'; s.color = cssRGB(ink); s.padding = '3px 6px';
+      s.textAlign = a.endsWith('left') ? 'left' : a.endsWith('right') ? 'right' : 'center';
+      if (tb.background) s.background = boxBg(ink, (tb.bg_opacity || 70) / 100);
+      if (tb.border) s.border = '1px solid ' + cssRGB(ink);
+      if (a.endsWith('left')) s.left = (m + nx) + '%'; else if (a.endsWith('right')) s.right = (m - nx) + '%'; else { s.left = (50 + nx) + '%'; tx = -50; }
+      if (a.startsWith('top')) s.top = (m - ny) + '%'; else if (a.startsWith('bottom')) s.bottom = (m + ny) + '%'; else { s.top = (50 - ny) + '%'; ty = -50; }
+      if (tx || ty) s.transform = 'translate(' + tx + '%,' + ty + '%)';
+      String(tb.text).split('\n').forEach((line) => { const d = document.createElement('div'); d.textContent = line || '\u00a0'; el.appendChild(d); });
+      ovRoot.appendChild(el);
+    });
+  }
+  $('#chk-leg').onchange = (ev) => ovRoot.classList.toggle('hide-leg', !ev.target.checked);
+  $('#chk-txt').onchange = (ev) => ovRoot.classList.toggle('hide-txt', !ev.target.checked);
+  // paints the legends and text boxes onto a picture (same look as on the page)
+  function paintDom(g, root, k) {
+    const base = view.getBoundingClientRect();
+    const walk = (el) => {
+      const cs = getComputedStyle(el); if (cs.display === 'none') return;
+      const r = el.getBoundingClientRect(), x = (r.left - base.left) * k, y = (r.top - base.top) * k, w = r.width * k, h = r.height * k;
+      if (el.tagName === 'CANVAS') { g.drawImage(el, x, y, w, h); }
+      const bw = parseFloat(cs.borderTopWidth) || 0, round = /%/.test(cs.borderTopLeftRadius) || parseFloat(cs.borderTopLeftRadius) >= r.width / 2 - 0.5;
+      const bg = cs.backgroundColor, hasBg = bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent';
+      if (el !== root && (hasBg || (bw > 0 && cs.borderTopStyle !== 'none')) && el.tagName !== 'CANVAS') {
+        g.beginPath(); if (round) g.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, 7); else g.rect(x, y, w, h);
+        if (hasBg) { g.fillStyle = bg; g.fill(); }
+        if (bw > 0 && cs.borderTopStyle !== 'none') { g.strokeStyle = cs.borderTopColor; g.lineWidth = bw * k; g.stroke(); }
+      } else if (el.tagName === 'CANVAS' && bw > 0) { g.strokeStyle = cs.borderTopColor; g.lineWidth = bw * k; g.strokeRect(x, y, w, h); }
+      for (const n of el.childNodes) {
+        if (n.nodeType === 3 && n.textContent.trim() !== '') {
+          const rg = document.createRange(); rg.selectNodeContents(n); const rr = rg.getBoundingClientRect();
+          g.font = cs.fontStyle + ' ' + cs.fontWeight + ' ' + (parseFloat(cs.fontSize) * k) + 'px ' + cs.fontFamily;
+          g.fillStyle = cs.color; g.textBaseline = 'middle'; g.textAlign = 'left';
+          g.fillText(n.textContent, (rr.left - base.left) * k, (rr.top + rr.height / 2 - base.top) * k);
+        } else if (n.nodeType === 1) walk(n);
+      }
+    };
+    walk(root);
+  }
+  $('#title').textContent = D.title;
+  $('#meta').textContent = D.meta;
+
+  // ---------------------------------------------------------------- camera, buttons, loop
+  function frame(dir) {
+    const box = new THREE.Box3().setFromObject(root);
+    const c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3());
+    const r = Math.max(s.x, s.y, s.z, 1);
+    camera.position.copy(c).addScaledVector(dir.clone().normalize(), r * 1.9);
+    controls.target.copy(c); camera.near = r / 1000; camera.far = r * 100; camera.updateProjectionMatrix(); controls.update();
+  }
+  const dirs = { iso: new THREE.Vector3(-0.55, 0.7, 1.0), top: new THREE.Vector3(0, 1, 0.001), south: new THREE.Vector3(0, 0.18, 1), west: new THREE.Vector3(-1, 0.18, 0) };
+  document.querySelectorAll('[data-view]').forEach((b) => { b.onclick = () => frame(dirs[b.dataset.view]); });
+  $('#btn-theme').onclick = () => { document.body.classList.toggle('dark'); buildOverlay(); };
+  $('#btn-full').onclick = () => { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); };
+  $('#btn-png').onclick = () => {
+    renderer.render(scene, camera);
+    const w = canvas.width, h = canvas.height, tmp = document.createElement('canvas'); tmp.width = w; tmp.height = h;
+    const g = tmp.getContext('2d'), dark = document.body.classList.contains('dark'), gr = g.createLinearGradient(0, 0, 0, h);
+    gr.addColorStop(0, dark ? '#475167' : '#cce3fa'); gr.addColorStop(1, dark ? '#191c24' : '#ffffff');
+    g.fillStyle = gr; g.fillRect(0, 0, w, h); g.drawImage(canvas, 0, 0);
+    paintDom(g, ovRoot, w / Math.max(view.getBoundingClientRect().width, 1));
+    tmp.toBlob((blob) => { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'model.png'; a.click(); });
+  };
+  const ro = new ResizeObserver(() => {
+    const r = view.getBoundingClientRect();
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(Math.max(r.width, 1), Math.max(r.height, 1), false);
+    camera.aspect = Math.max(r.width, 1) / Math.max(r.height, 1); camera.updateProjectionMatrix();
+  });
+  ro.observe(view);
+  if (D.theme === 'dark') document.body.classList.add('dark');
+  buildOverlay(); new ResizeObserver(() => buildOverlay()).observe(view);
+  frame(dirs.iso);
+  renderer.setAnimationLoop(() => { controls.update(); drawAxis(); drawLabels3d(); renderer.render(scene, camera); });
+  window.__viewer = { THREE, scene, camera, renderer, controls, items, cut, applyClip, frame, root, labels, axisLabels, axl, boxGrp, drawAxis };
+  document.title = D.title;
+}
+boot();
+</script>
+</body>
+</html>
