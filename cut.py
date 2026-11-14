@@ -1,9 +1,9 @@
 """Cutting planes for the 3D scene: one plane each for Easting (X), Northing (Y) and elevation."""
-from vtkmodules.vtkCommonDataModel import vtkPlane, vtkPlaneCollection
+from vtkmodules.vtkCommonDataModel import vtkPlane, vtkPlaneCollection, vtkNonMergingPointLocator
 from vtkmodules.vtkFiltersCore import vtkClipPolyData, vtkPolyDataNormals, vtkTriangleFilter, vtkCleanPolyData
 from vtkmodules.vtkFiltersGeneral import vtkClipClosedSurface
 from vtkmodules.vtkFiltersSources import vtkPlaneSource
-from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper
+from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper, vtkBillboardTextActor3D, vtkTextActor3D
 
 FAR = 1.0e9
 
@@ -28,6 +28,7 @@ class CutController:
 
     def __init__(self, ren):
         self.ren = ren
+        self.labels = {}     # element name -> registry entry of text labels (hidden when they lie on the cut-away side)
         self.items = {}      # element name -> {"planes": [3 planes], "ccs": clip filter for closed solids or None}
         self._keep = []      # keeps every filter and input alive for as long as the controller lives
         self.markers = []
@@ -53,6 +54,9 @@ class CutController:
         """Puts the clipping filters in front of every 3D element listed in the registry."""
         self.bounds0 = self.ren.ComputeVisiblePropBounds()
         for e in registry:
+            if e["actors"] and isinstance(e["actors"][0], (vtkBillboardTextActor3D, vtkTextActor3D)):
+                self.labels[e["name"]] = e
+                continue
             if e["name"] == "Block model" or not e["actors"]:
                 continue
             a = e["actors"][0]
@@ -88,6 +92,9 @@ class CutController:
                 prev = None
                 for pl in planes:
                     c = vtkClipPolyData()
+                    if e["name"] == "Boreholes (lithology)":
+                        # keep the points where two lithology intervals meet apart, otherwise their colours are blended
+                        c.SetLocator(vtkNonMergingPointLocator())
                     if prev is None:
                         c.SetInputData(poly)
                     else:
@@ -115,6 +122,20 @@ class CutController:
                 pl.SetOrigin(*o)
             if it["ccs"] is not None:
                 it["ccs"].Modified()
+        for name, e in self.labels.items():
+            cut_this = included is None or name in included
+            hidden = set()
+            if cut_this:
+                for i, a in enumerate(e["actors"]):
+                    pos = a.GetPosition()
+                    for k, (on, val, keep) in enumerate(spec):
+                        if on and ((pos[k] < val) if keep > 0 else (pos[k] > val)):
+                            hidden.add(i)
+                            break
+            e["cut_hidden"] = hidden
+            if e.get("user_visible", True):
+                for i, a in enumerate(e["actors"]):
+                    a.SetVisibility(0 if i in hidden else 1)
         self.update_markers(spec)
 
     def update_markers(self, spec):

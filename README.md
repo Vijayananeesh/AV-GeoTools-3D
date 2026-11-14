@@ -14,6 +14,8 @@ QGIS plugin by Aneesh Vijayan for interactive 3D visualisation of soil and groun
 ## Requirements
 QGIS 4.x (Windows installer) with its Python modules VTK, numpy and scipy. Tested on QGIS 4.2.2.
 
+If the plugin says that the Python package `vtk` (or `scipy`, `numpy`) is missing: close QGIS, open the **OSGeo4W Shell** (Start menu > QGIS), run `python -m pip install vtk` (use `--user` if you have no administrator rights), and start QGIS again.
+
 ## Install
 Plugins > Manage and Install Plugins > Install from ZIP, choose the ZIP file, then open it from the Plugins menu ("AV GeoTools 3D") or the toolbar button.
 Tools > Demo data adds example layers.
@@ -31,3 +33,7 @@ GNU General Public License, version 2 or later. See LICENSE.
 
 ## Contact
 Aneesh Vijayan, krishnanvijayananeesh@gmail.com
+
+
+## Reporting a problem
+When something goes wrong, the message window has a **Report this problem by e-mail** button (and **Copy details**). It opens an e-mail to the author with the error text and the program versions; your Windows user name is removed from file paths. Nothing is sent until you press Send in your own mail program.

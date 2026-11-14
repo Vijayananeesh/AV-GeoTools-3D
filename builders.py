@@ -12,6 +12,10 @@ from vtkmodules.vtkRenderingLabel import vtkLabeledDataMapper
 from vtkmodules.vtkRenderingAnnotation import vtkScalarBarActor, vtkLegendBoxActor
 from . import cut as _cut
 import vtkmodules.vtkRenderingOpenGL2  # noqa: F401  (registers the OpenGL backend)
+try:
+    import vtkmodules.vtkRenderingVolumeOpenGL2  # noqa: F401  (volume rendering for the plume cloud)
+except ImportError:
+    _log.debug("volume rendering is not available", exc_info=True)
 import vtkmodules.vtkRenderingFreeType  # noqa: F401  (text support)
 import vtkmodules.vtkInteractionStyle  # noqa: F401
 
@@ -22,7 +26,7 @@ PALETTE = [(0.76, 0.70, 0.50), (0.55, 0.35, 0.20), (0.90, 0.80, 0.30), (0.45, 0.
 # Lithology look, set by the viewer before every draw: colours per unit, legend text, order and legend options.
 STYLE = {"colours": {}, "labels": {}, "show": {}, "order": [],
          "legend": {"show": True, "title": "", "corner": "bottom-left", "scale": 1.0, "background": True, "border": False,
-               "text_size": 16, "symbol_size": 14, "gap": 8, "spacing": 6, "padding": 8, "text_mode": "auto",
+               "text_size": 12, "symbol_size": 11, "gap": 8, "spacing": 6, "padding": 8, "text_mode": "auto",
                "text_colour": (0.0, 0.0, 0.0), "bold": False, "italic": False, "font": "arial", "shape": "square", "dpr": 1.0}}
 
 
@@ -35,7 +39,7 @@ def set_style(colours=None, labels=None, show=None, order=None, legend=None):
     STYLE["show"] = dict(show or {})
     STYLE["order"] = list(order or [])
     base = dict(STYLE["legend"]) if False else {"show": True, "title": "", "corner": "bottom-left", "scale": 1.0, "background": True, "border": False,
-               "text_size": 16, "symbol_size": 14, "gap": 8, "spacing": 6, "padding": 8, "text_mode": "auto",
+               "text_size": 12, "symbol_size": 11, "gap": 8, "spacing": 6, "padding": 8, "text_mode": "auto",
                "text_colour": (0.0, 0.0, 0.0), "bold": False, "italic": False, "font": "arial", "shape": "square", "dpr": 1.0}
     base.update(legend or {})
     STYLE["legend"] = base
@@ -110,26 +114,25 @@ def _boreholes(cs, intervals, codes, ve, radius):
 
 
 def _labels(cs, ve, fg=(1.0, 1.0, 1.0)):
-    pts = vtkPoints()
-    ids = vtkStringArray()
-    ids.SetName("ids")
+    """Hole names as text that faces the camera, one actor per hole (so crowded names can be tidied like the result labels)."""
+    acts = []
+    bg = (0.05, 0.06, 0.08) if sum(fg) > 1.5 else (1.0, 1.0, 1.0)
     for h, (x, y, z, d) in cs.items():
-        pts.InsertNextPoint(x, y, z * ve)
-        ids.InsertNextValue(h)
-    pd = vtkPolyData()
-    pd.SetPoints(pts)
-    pd.GetPointData().AddArray(ids)
-    m = vtkLabeledDataMapper()
-    m.SetInputData(pd)
-    m.SetLabelModeToLabelFieldData()
-    m.SetFieldDataName("ids")
-    tp = m.GetLabelTextProperty()
-    tp.SetColor(*fg)
-    tp.SetFontSize(14)
-    tp.SetShadow(1 if sum(fg) > 1.5 else 0)
-    a = vtkActor2D()
-    a.SetMapper(m)
-    return a
+        ta = vtkBillboardTextActor3D()
+        ta.SetPosition(float(x), float(y), float(z * ve))
+        ta.SetInput(str(h))
+        ta.SetDisplayOffset(6, 6)
+        tp = ta.GetTextProperty()
+        tp.SetFontFamilyToArial()
+        tp.SetFontSize(13)
+        tp.SetBold(1)
+        tp.SetColor(*fg)
+        tp.SetJustificationToLeft()
+        tp.SetVerticalJustificationToCentered()
+        tp.SetBackgroundColor(*bg)
+        tp.SetBackgroundOpacity(0.45)
+        acts.append(ta)
+    return acts
 
 
 def _surface(xs, ys, z, ve):
@@ -301,9 +304,170 @@ def _clip_ground(poly, cimg):
     return out
 
 
+def _shell_build(img, pinfo, level, nxt, smooth, ve, lut, cmin, cmax, closed=True, cutcol=True):
+    """One plume shell. Returns (poly, point colours or None).
+    closed: the shell is built from one field (concentration above the level AND inside the allowed zone), so it is cut exactly
+    at the ground, water table, well bottoms and hull and the cut face is part of the same surface, not hollow.
+    The cut face of each shell only covers the band between its level and the next one, so the cut faces of the nested
+    shells tile without overlapping, and with `cutcol` they are coloured by the concentration (a cross-section)."""
+    arrs = pinfo.get("arrays")
+    if not closed or not arrs or pinfo.get("clip") is None:
+        return _clip_ground(_smooth_poly(_contour(img, level), smooth), pinfo["clip"]), None
+    from scipy import ndimage
+    from scipy.ndimage import map_coordinates
+    from vtkmodules.vtkFiltersCore import vtkAppendPolyData
+    xs, ys, zs, vals, allowed = arrs
+    vals = np.asarray(vals, dtype=float)
+    smooth = float(smooth or 0)
+    vs = ndimage.gaussian_filter(vals, sigma=0.3 + 0.1 * smooth) if smooth > 0 else vals
+    nz, ny, nx = vals.shape
+    dx, dy, dz = float(xs[1] - xs[0]), float(ys[1] - ys[0]), float(zs[1] - zs[0])
+    cell = min(dx, dy)
+
+    def image_of(arr):
+        im = vtkImageData()
+        im.SetDimensions(nx, ny, nz)
+        im.SetOrigin(float(xs[0]), float(ys[0]), float(zs[0]) * ve)
+        im.SetSpacing(dx, dy, dz * ve)
+        a = numpy_to_vtk(np.ascontiguousarray(arr, dtype=np.float32).ravel(), deep=1)
+        a.SetName("f")
+        im.GetPointData().SetScalars(a)
+        return im
+
+    F = np.minimum((vs - level) / max(level, 1e-12), np.asarray(allowed, dtype=float) / cell)
+    F[0, :, :] = F[-1, :, :] = -1.0                      # a shell that reaches the edge of the grid is closed there too
+    F[:, 0, :] = F[:, -1, :] = -1.0
+    F[:, :, 0] = F[:, :, -1] = -1.0
+    cf = vtkContourFilter()
+    cf.SetInputData(image_of(F))
+    cf.SetValue(0, 0.0)
+    cf.ComputeNormalsOn()
+    cf.ComputeScalarsOff()
+    cf.Update()
+    poly = cf.GetOutput()
+    if poly.GetNumberOfCells() == 0:
+        return poly, None
+    eps = 0.35 * cell
+    amp = vtkImplicitVolume()
+    amp.SetVolume(image_of(np.asarray(allowed, dtype=float)))
+    parts_in = []
+    for inside in (False, True):                           # skin: away from the cut faces; face: the part lying on them
+        cl = vtkClipPolyData()
+        cl.SetInputData(poly)
+        cl.SetClipFunction(amp)
+        cl.SetValue(eps)
+        if inside:
+            cl.InsideOutOn()
+        cl.Update()
+        q = vtkPolyData()
+        q.DeepCopy(cl.GetOutput())
+        parts_in.append(q)
+    skin, face = parts_in
+    if nxt is not None and face.GetNumberOfCells() > 0:
+        imp = vtkImplicitVolume()
+        imp.SetVolume(image_of(vs))
+        clip = vtkClipPolyData()
+        clip.SetInputData(face)
+        clip.SetClipFunction(imp)
+        clip.SetValue(float(nxt))
+        clip.InsideOutOn()                                # only the band below the next level
+        clip.Update()
+        face = clip.GetOutput()
+    parts = []
+    for part, flag in ((skin, 0), (face, 1)):
+        if part.GetNumberOfCells() == 0:
+            continue
+        q = vtkPolyData()
+        q.DeepCopy(part)
+        fl = numpy_to_vtk(np.full(q.GetNumberOfPoints(), flag, dtype=np.uint8), deep=1)
+        fl.SetName("cutface")
+        q.GetPointData().AddArray(fl)
+        parts.append(q)
+    if not parts:
+        return vtkPolyData(), None
+    ap = vtkAppendPolyData()
+    for q in parts:
+        ap.AddInputData(q)
+    ap.Update()
+    out = vtkPolyData()
+    out.DeepCopy(ap.GetOutput())
+    if not cutcol:
+        return out, None
+    P = vtk_to_numpy(out.GetPoints().GetData()).astype(float)
+    flags = vtk_to_numpy(out.GetPointData().GetArray("cutface")).astype(bool)
+    co = np.array([(P[:, 2] - zs[0] * ve) / (dz * ve), (P[:, 1] - ys[0]) / dy, (P[:, 0] - xs[0]) / dx])
+    conc = map_coordinates(vs, co, order=1, mode="nearest")
+    table = np.linspace(cmin, cmax, 256)
+    cols = np.empty((256, 3))
+    for i, v in enumerate(table):
+        c = [0.0, 0.0, 0.0]
+        lut.GetColor(float(v), c)
+        cols[i] = c
+    pos = np.clip((conc - cmin) / max(cmax - cmin, 1e-12), 0.0, 1.0) * 255.0
+    own = [0.0, 0.0, 0.0]
+    lut.GetColor(float(min(max(level, cmin), cmax)), own)
+    prgb = np.tile(np.array(own), (len(P), 1))
+    for k in range(3):
+        prgb[flags, k] = np.interp(pos[flags], np.arange(256), cols[:, k])
+    return out, prgb
+
+
 def _plume(pl, ve, iso, influence, method="kriging", detail=48, zaniso=3.0, smooth=0, ground=None):
     img, info = _plume_grid(pl, ve, influence, method, detail, zaniso, ground)
     return _clip_ground(_smooth_poly(_contour(img, iso), smooth), info["clip"])
+
+
+def _fade_ctx(fo, pinfo, influence, samples, ve, zaniso):
+    """Settings for fading a shell away from the samples, or None when it is switched off.
+    Distance is measured like the estimate does: a vertical metre counts `zaniso` times a horizontal one.
+    Full fade is reached at `ref`: the distance set by the user, else the variogram range (kriging), else the influence radius."""
+    if not fo or not fo.get("on") or samples is None or len(samples) == 0:
+        return None
+    sam = np.asarray(samples, dtype=float)[:, :3]
+    ref = float(fo.get("dist") or 0.0)
+    how = "set by you"
+    if ref <= 0:
+        if pinfo.get("method") == "kriging" and pinfo.get("range"):
+            ref, how = float(pinfo["range"]), "the variogram range"
+        else:
+            sxy = max(np.ptp(sam[:, 0]), np.ptp(sam[:, 1]), 1.0)
+            ref = float(influence) if influence and influence > 0 else max(0.3 * sxy, 5.0)
+            how = "the influence radius"
+    st = min(max(float(fo.get("strength", 0.6)), 0.0), 0.95)
+    return {"samples": sam, "ref": ref, "strength": st, "ve": float(ve or 1.0), "zaniso": max(float(zaniso), 0.1),
+            "note": "Shells fade with distance from the nearest sample: down to %d%% opacity at %.3g m or more (%s)." % (
+                round((1.0 - st) * 100), ref, how)}
+
+
+def _apply_fade(mapper, poly, rgb, fd, pt_rgb=None):
+    """Colours the vertices of a shell: its colour (or `pt_rgb`, one colour per vertex) and an opacity that falls with the
+    distance to the nearest sample when the fade is on."""
+    if poly.GetNumberOfPoints() == 0 or (fd is None and pt_rgb is None):
+        mapper.ScalarVisibilityOff()
+        return
+    n = poly.GetNumberOfPoints()
+    alpha = np.ones(n)
+    if fd is not None:
+        from scipy.spatial import cKDTree
+        P = vtk_to_numpy(poly.GetPoints().GetData()).astype(float).copy()
+        P[:, 2] /= fd["ve"]                                # the scene is stretched by the vertical exaggeration
+        sc = np.array([1.0, 1.0, fd["zaniso"]])
+        good = np.isfinite(P).all(axis=1)                  # odd points must never stop the drawing
+        dist = np.zeros(n)
+        if good.any():
+            dist[good], _ = cKDTree(fd["samples"] * sc).query(P[good] * sc)
+        alpha = 1.0 - fd["strength"] * np.clip(dist / fd["ref"], 0.0, 1.0)
+    rgba = np.empty((n, 4), dtype=np.uint8)
+    if pt_rgb is None:
+        rgba[:, 0], rgba[:, 1], rgba[:, 2] = [int(round(float(c) * 255)) for c in rgb]
+    else:
+        rgba[:, :3] = np.round(np.clip(np.asarray(pt_rgb), 0.0, 1.0) * 255).astype(np.uint8)
+    rgba[:, 3] = np.round(alpha * 255).astype(np.uint8)
+    arr = numpy_to_vtk(rgba, deep=1)
+    arr.SetName("fade")
+    poly.GetPointData().SetScalars(arr)
+    mapper.SetColorModeToDirectScalars()
+    mapper.ScalarVisibilityOn()
 
 
 def _keep_volume(info, kind, pinfo, cmax):
@@ -730,13 +894,18 @@ def build_scene(ren, collars, intervals, surface, plume, ve=1.0, radius=0.0, iso
         act.SetMapper(m)
         ren.AddActor(act)
         reg("Boreholes (lithology)", [act], True)
-        lab = _labels(cs, ve, fg)
-        ren.AddActor2D(lab)
-        reg("Borehole labels", [lab], False)
+        labs = _labels(cs, ve, fg)
+        for ta in labs:
+            ren.AddActor(ta)
+        lab_entry = {"name": "Borehole labels", "actors": labs, "fade": False, "ren": ren, "declutter": True,
+                     "size_px": 13, "off_px": 6, "label_vals": []}
+        if registry is not None and labs:
+            registry.append(lab_entry)
+            lab_entry["dtag"] = ren.AddObserver("StartEvent", lambda *a, e=lab_entry: _declutter(e))
         lgs = _legend(codes, fg, ren) if codes else None
         if lgs:
             for a_ in lgs:
-                ren.AddActor2D(a_)
+                ren.AddViewProp(a_)
             reg("Lithology legend", lgs, False)
         if geology and geology.get("on") and intervals:
             notes += _geology(ren, cs, intervals, codes, ve, geology, reg)
@@ -833,7 +1002,7 @@ def build_scene(ren, collars, intervals, surface, plume, ve=1.0, radius=0.0, iso
         bar.SetLookupTable(lut)
         bar.SetTitle(plume_title or "Concentration")
         style_plume_bar(bar, plume_legend, fg, (plume_opts or {}).get("dpr", 1.0), plume_title)
-        ren.AddActor2D(bar)
+        ren.AddViewProp(bar)
         reg("Plume scale bar", [bar], False)
         shells = shells or {}
         po = plume_opts or {}
@@ -857,21 +1026,37 @@ def build_scene(ren, collars, intervals, surface, plume, ve=1.0, radius=0.0, iso
             over = sorted(float(m) for m in (shells.get("mult") or []) if float(m) >= cmax * 0.999)
             if over:
                 notes.append("Shell level(s) %s left out: they are above the highest result (%.4g)." % (", ".join("%.4g" % m for m in over), cmax))
-        if levels:
+        if po.get("display") == "cloud":
+            img, pinfo = _plume_grid(pl, ve, influence, plume_method, po.get("detail", 48), po.get("zaniso", 3.0), ground, water, hull)
+            _keep_volume(info, "soil", pinfo, cmax)
+            fd = _fade_ctx(po.get("fade"), pinfo, influence, pl, ve, po.get("zaniso", 3.0))
+            if fd:
+                notes.append(fd["note"])
+            notes.append(_plume_method_note(pinfo, plume_method, po))
+            base = iso if iso > 0 else 0.05 * cmax
+            if _add_cloud(ren, pinfo, lut, cmin, cmax, base, fd, ve, po.get("smooth", 0), po.get("density", 0.8), registry, levels=levels):
+                notes.append("Plume cloud from %.4g (faint) to %.4g (dense), data range %.4g to %.4g." % (base, cmax, cmin, cmax))
+            else:
+                notes.append("No plume cloud could be drawn above %.4g: try a lower lowest value (data range %.4g to %.4g)." % (base, cmin, cmax))
+        elif levels:
             # nested see-through shells: the lowest level is the outermost and the faintest
             img, pinfo = _plume_grid(pl, ve, influence, plume_method, po.get("detail", 48), po.get("zaniso", 3.0), ground, water, hull)
             _keep_volume(info, "soil", pinfo, cmax)
+            fd = _fade_ctx(po.get("fade"), pinfo, influence, pl, ve, po.get("zaniso", 3.0))
+            if fd:
+                notes.append(fd["note"])
             notes.append(_plume_method_note(pinfo, plume_method, po))
             drawn = []
             for j, level in enumerate(levels):
-                poly = _clip_ground(_smooth_poly(_contour(img, level), po.get("smooth", 0)), pinfo["clip"])
+                poly, prgb = _shell_build(img, pinfo, level, levels[j + 1] if j + 1 < len(levels) else None, po.get("smooth", 0), ve, lut, cmin, cmax,
+                                          po.get("cap", True), po.get("cutcol", True))
                 if poly.GetNumberOfCells() == 0:
                     continue
                 rgb = [0.0, 0.0, 0.0]                              # the same colour scale as the sample spheres and the legend
                 lut.GetColor(float(min(max(level, cmin), cmax)), rgb)
                 sm = vtkPolyDataMapper()
                 sm.SetInputData(poly)
-                sm.ScalarVisibilityOff()
+                _apply_fade(sm, poly, rgb, fd, prgb)
                 sa = vtkActor()
                 sa.SetMapper(sm)
                 sa.GetProperty().SetColor(*rgb)
@@ -887,16 +1072,19 @@ def build_scene(ren, collars, intervals, surface, plume, ve=1.0, radius=0.0, iso
             level = iso if iso > 0 else 0.25 * cmax
             img, pinfo = _plume_grid(pl, ve, influence, plume_method, po.get("detail", 48), po.get("zaniso", 3.0), ground, water, hull)
             _keep_volume(info, "soil", pinfo, cmax)
+            fd = _fade_ctx(po.get("fade"), pinfo, influence, pl, ve, po.get("zaniso", 3.0))
+            if fd:
+                notes.append(fd["note"])
             notes.append(_plume_method_note(pinfo, plume_method, po))
-            iso_poly = _clip_ground(_smooth_poly(_contour(img, level), po.get("smooth", 0)), pinfo["clip"])
+            iso_poly, iprgb = _shell_build(img, pinfo, level, None, po.get("smooth", 0), ve, lut, cmin, cmax, po.get("cap", True), po.get("cutcol", True))
             if iso_poly.GetNumberOfCells() > 0:
                 im = vtkPolyDataMapper()
                 im.SetInputData(iso_poly)
-                im.ScalarVisibilityOff()
                 ia = vtkActor()
                 ia.SetMapper(im)
                 irgb = [0.0, 0.0, 0.0]                              # same colour scale as the spheres and the legend
                 lut.GetColor(float(min(max(level, cmin), cmax)), irgb)
+                _apply_fade(im, iso_poly, irgb, fd, iprgb)
                 ia.GetProperty().SetColor(*irgb)
                 ia.GetProperty().SetOpacity(0.45)
                 ren.AddActor(ia)
@@ -961,6 +1149,7 @@ def add_axes(ren, info, theme="dark", registry=None):
     ax.SetXTitle("Easting (m)")
     ax.SetYTitle("Northing (m)")
     ax.SetZTitle("Elevation (m)")
+    ax.SetLabelScaling(False, 0, 0, 0)                  # full coordinates (1015250), not "1.01525 x 10^6" pieces that run together
     ax.SetXLabelFormat("%.0f")
     ax.SetYLabelFormat("%.0f")
     ax.SetZLabelFormat("%.1f")
@@ -972,6 +1161,9 @@ def add_axes(ren, info, theme="dark", registry=None):
     for i in range(3):
         ax.GetTitleTextProperty(i).SetColor(*col)
         ax.GetLabelTextProperty(i).SetColor(*col)
+        ax.GetTitleTextProperty(i).SetFontSize(14)
+        ax.GetLabelTextProperty(i).SetFontSize(10)
+        ax.GetLabelTextProperty(i).SetShadow(0)
     for prop in (ax.GetXAxesLinesProperty(), ax.GetYAxesLinesProperty(), ax.GetZAxesLinesProperty()):
         prop.SetColor(*col)
     for prop in (ax.GetXAxesGridlinesProperty(), ax.GetYAxesGridlinesProperty(), ax.GetZAxesGridlinesProperty()):
@@ -1003,6 +1195,118 @@ def _grid_quads(xs, ys, Z, ve, valid):
     ca.ImportLegacyFormat(numpy_to_vtkIdTypeArray(cells, deep=1))
     pd.SetPolys(ca)
     return pd
+
+
+def _hull_planes(model, x0, y0):
+    """Vertical planes (scene coordinates) along the outline of the boreholes; they keep the inside."""
+    from vtkmodules.vtkCommonDataModel import vtkPlane
+    from . import model as _m
+    planes = []
+    for p0, n in _m.hull_edges(model):
+        pl = vtkPlane()
+        pl.SetOrigin(float(p0[0] - x0), float(p0[1] - y0), 0.0)
+        pl.SetNormal(float(n[0]), float(n[1]), 0.0)
+        planes.append(pl)
+    return planes
+
+
+def _hull_clip_closed(raw, planes):
+    """Cuts a closed solid with the outline planes; the cut walls are filled, so it stays closed."""
+    from vtkmodules.vtkCommonDataModel import vtkPlaneCollection
+    from vtkmodules.vtkFiltersGeneral import vtkClipClosedSurface
+    ccs = vtkClipClosedSurface()
+    ccs.SetInputData(raw)
+    ccs.GenerateFacesOn()
+    ccs.GenerateOutlineOff()
+    coll = vtkPlaneCollection()
+    for pl in planes:
+        coll.AddItem(pl)
+    ccs.SetClippingPlanes(coll)
+    ccs.Update()
+    out = _cut.prepare_closed(ccs.GetOutput())      # merge the duplicated points first, so open edges are real
+    # where a unit is very thin at the wall the capping can leave small holes: close any that remain
+    from vtkmodules.vtkFiltersCore import vtkFeatureEdges
+    fe = vtkFeatureEdges()
+    fe.SetInputData(out)
+    fe.BoundaryEdgesOn()
+    fe.NonManifoldEdgesOff()
+    fe.FeatureEdgesOff()
+    fe.ManifoldEdgesOff()
+    fe.Update()
+    if fe.GetOutput().GetNumberOfCells() > 0:
+        from vtkmodules.vtkFiltersModeling import vtkFillHolesFilter
+        fh = vtkFillHolesFilter()
+        fh.SetInputData(out)
+        fh.SetHoleSize(1.0e9)
+        fh.Update()
+        out = _cut.prepare_closed(fh.GetOutput())
+    return out
+
+
+def _hull_clip_poly(poly, planes):
+    """Cuts an open surface with the outline planes."""
+    from vtkmodules.vtkFiltersCore import vtkClipPolyData
+    cur = poly
+    for pl in planes:
+        c = vtkClipPolyData()
+        c.SetInputData(cur)
+        c.SetClipFunction(pl)
+        c.Update()
+        cur = c.GetOutput()
+    return cur
+
+
+def _normals_of(poly):
+    from vtkmodules.vtkFiltersCore import vtkPolyDataNormals
+    nf = vtkPolyDataNormals()
+    nf.SetInputData(poly)
+    nf.SetFeatureAngle(50.0)
+    nf.SplittingOn()
+    nf.ConsistencyOn()
+    nf.Update()
+    return nf.GetOutput()
+
+
+def _solid_hull(xs, ys, top, base, ve, planes, eps=0.02):
+    """Closed solid between two grid surfaces, cut exactly by vertical planes. The solid is built as a volume
+    (one hexahedron per grid cell), the volume is cut and its outside skin is taken, so it is watertight by
+    construction, also where a thin unit meets the wall. Returns a closed triangulated surface or None."""
+    from vtkmodules.util.numpy_support import numpy_to_vtkIdTypeArray
+    from vtkmodules.vtkCommonDataModel import vtkUnstructuredGrid
+    from vtkmodules.vtkFiltersGeneral import vtkClipDataSet
+    ny, nx = top.shape
+    ok = np.isfinite(top) & np.isfinite(base) & ((top - base) > eps)
+    cell_ok = ok[:-1, :-1] & ok[:-1, 1:] & ok[1:, 1:] & ok[1:, :-1]
+    if not cell_ok.any():
+        return None
+    X, Y = np.meshgrid(xs, ys)
+    n = ny * nx
+    pts = np.vstack([np.column_stack([X.ravel(), Y.ravel(), (top * ve).ravel()]),
+                     np.column_stack([X.ravel(), Y.ravel(), (base * ve).ravel()])]).astype(np.float64)
+    J, I = np.nonzero(cell_ok)
+    a = J * nx + I
+    b, c, dd = a + 1, a + nx + 1, a + nx
+    hexes = np.column_stack([n + a, n + b, n + c, n + dd, a, b, c, dd]).astype(np.int64)
+    cells = np.column_stack([np.full(len(hexes), 8, dtype=np.int64), hexes]).ravel()
+    vp = vtkPoints()
+    vp.SetData(numpy_to_vtk(pts, deep=1))
+    ug = vtkUnstructuredGrid()
+    ug.SetPoints(vp)
+    ca = vtkCellArray()
+    ca.ImportLegacyFormat(numpy_to_vtkIdTypeArray(cells, deep=1))
+    ug.SetCells(12, ca)
+    cur = ug
+    for pl in planes:
+        cd = vtkClipDataSet()
+        cd.SetInputData(cur)
+        cd.SetClipFunction(pl)
+        cd.Update()
+        cur = cd.GetOutput()
+    sf = vtkDataSetSurfaceFilter()
+    sf.SetInputData(cur)
+    sf.Update()
+    out = sf.GetOutput()
+    return out if out.GetNumberOfPoints() else None
 
 
 def _solid_mesh(xs, ys, top, base, ve, eps=0.02, normals=True):
@@ -1091,8 +1395,17 @@ def make_block_actor(model, info, ve, nz=40, cuts=None, codes=None):
     th.SetLowerThreshold(-0.5)
     th.SetUpperThreshold(1e6)
     th.SetThresholdFunction(vtkThreshold.THRESHOLD_BETWEEN)
+    th.Update()
+    grid = th.GetOutput()
+    for pl in _hull_planes(model, x0, y0):
+        from vtkmodules.vtkFiltersGeneral import vtkClipDataSet
+        cd = vtkClipDataSet()
+        cd.SetInputData(grid)
+        cd.SetClipFunction(pl)
+        cd.Update()
+        grid = cd.GetOutput()
     surf = vtkDataSetSurfaceFilter()
-    surf.SetInputConnection(th.GetOutputPort())
+    surf.SetInputData(grid)
     surf.Update()
     n_codes = max(codes.values()) if codes else len(units)
     mp = vtkPolyDataMapper()
@@ -1107,7 +1420,7 @@ def make_block_actor(model, info, ve, nz=40, cuts=None, codes=None):
     return act
 
 
-def add_model(ren, model, info, ve, nz=40, cuts=None, registry=None):
+def add_model(ren, model, info, ve, nz=40, cuts=None, registry=None, smooth=0.0):
     """Draws the contact surfaces of a stratigraphic model and its block model. Returns notes."""
     if not info or "origin" not in info or model is None:
         return []
@@ -1120,13 +1433,35 @@ def add_model(ren, model, info, ve, nz=40, cuts=None, registry=None):
     xe = np.concatenate([[model["xs"][0] - model["dx"] / 2], model["xs"], [model["xs"][-1] + model["dx"] / 2]]) - x0
     ye = np.concatenate([[model["ys"][0] - model["dy"] / 2], model["ys"], [model["ys"][-1] + model["dy"] / 2]]) - y0
     solids = 0
+    hplanes = _hull_planes(model, x0, y0)
+    fac = 3 if smooth and smooth > 0 else 1
+    if fac > 1:
+        from scipy import ndimage as _ndi
+        xf = np.interp(np.linspace(0, len(xe) - 1, (len(xe) - 1) * fac + 1), np.arange(len(xe)), xe)
+        yf = np.interp(np.linspace(0, len(ye) - 1, (len(ye) - 1) * fac + 1), np.arange(len(ye)), ye)
+        sig = float(smooth) * fac
+
+        def _refine(a):
+            # one and the same smoothing for every surface keeps the layers in order (it is a weighted average)
+            ny_, nx_ = a.shape
+            jj, ii = np.meshgrid(np.linspace(0, ny_ - 1, (ny_ - 1) * fac + 1), np.linspace(0, nx_ - 1, (nx_ - 1) * fac + 1), indexing="ij")
+            return _ndi.gaussian_filter(_ndi.map_coordinates(a, [jj, ii], order=1, mode="nearest"), sig, mode="nearest")
     for k, unit in enumerate(units):
         top = np.pad(tops[k] - z0, 1, mode="edge")
         base = np.pad((tops[k + 1] if k + 1 < len(units) else np.full_like(tops[k], zbot)) - z0, 1, mode="edge")
-        mesh = _solid_mesh(xe, ye, top, base, ve)
+        gx, gy = xe, ye
+        if fac > 1:
+            top, base, gx, gy = _refine(top), _refine(base), xf, yf
+        mesh = _solid_mesh(gx, gy, top, base, ve)
         if mesh is None:
             continue
-        raw = _cut.prepare_closed(_solid_mesh(xe, ye, top, base, ve, normals=False))
+        raw = _cut.prepare_closed(_solid_mesh(gx, gy, top, base, ve, normals=False))
+        if hplanes:
+            hs = _solid_hull(gx, gy, top, base, ve, hplanes)
+            if hs is None:
+                continue
+            raw = _cut.prepare_closed(hs)
+            mesh = _normals_of(raw)
         mp = vtkPolyDataMapper()
         mp.SetInputData(mesh)
         mp.ScalarVisibilityOff()
@@ -1145,6 +1480,10 @@ def add_model(ren, model, info, ve, nz=40, cuts=None, registry=None):
         quads = _grid_quads(xs, ys, model["tops"][k] - z0, ve, model["thick"][k] > 0.05)
         if quads is None:
             continue
+        if hplanes:
+            quads = _hull_clip_poly(quads, hplanes)
+            if quads.GetNumberOfPoints() == 0:
+                continue
         mp = vtkPolyDataMapper()
         mp.SetInputData(quads)
         mp.ScalarVisibilityOff()
@@ -1164,6 +1503,154 @@ def add_model(ren, model, info, ve, nz=40, cuts=None, registry=None):
         registry.append({"name": "Block model", "actors": [block], "fade": True, "default_visible": False})
     return ["Model: %d solid unit(s) drawn (contact surfaces and the block model are hidden until ticked)." % solids]
 
+
+
+def _add_cloud(ren, pinfo, lut, cmin, cmax, base, fd, ve, smooth, density, registry, name="Plume cloud", levels=None):
+    """Draws the plume as a smooth cloud (volume rendering): colour from the plume colour ramp, density rising with the
+    concentration (log scale between the lowest level and the highest result), cut at the limits, optionally thinner far from the samples.
+    Returns True when something was drawn."""
+    from vtkmodules.vtkRenderingCore import vtkVolume, vtkVolumeProperty
+    from vtkmodules.vtkRenderingVolumeOpenGL2 import vtkSmartVolumeMapper
+    arrs = pinfo.get("arrays")
+    if not arrs:
+        return False
+    xs, ys, zs, vals, allowed = arrs
+    vals = np.asarray(vals, dtype=float)
+    smooth = float(smooth or 0)
+    if smooth > 0:
+        from scipy import ndimage
+        vals = ndimage.gaussian_filter(vals, sigma=0.4 + 0.12 * smooth)
+    base = max(float(base), cmax * 1e-6)
+    if cmax <= base:
+        return False
+    lv = sorted({float(x) for x in (levels or []) if cmax > float(x) > 0})
+    if lv:
+        # the shell levels set the cloud: nothing below the lowest level, then denser and denser at each higher level
+        n = len(lv)
+        xp = [lv[0] * 0.8] + lv + [cmax]
+        fp = [0.0] + [0.30 + 0.65 * (k / max(n, 1)) ** 1.0 for k in range(n)] + [1.0]
+        alpha = np.interp(vals, xp, fp)
+    else:
+        t = np.clip(np.log(np.maximum(vals, 1e-300) / base) / math.log(cmax / base), 0.0, 1.0)
+        t[vals < base] = 0.0
+        alpha = np.power(t, 0.85)
+    if allowed is not None:
+        alpha = np.where(np.asarray(allowed) > 0, alpha, 0.0)
+    nz, ny, nx = vals.shape
+    if fd is not None:
+        from scipy.spatial import cKDTree
+        Z, Y, X = np.meshgrid(zs, ys, xs, indexing="ij")
+        G = np.column_stack([X.ravel(), Y.ravel(), Z.ravel()])
+        sc = np.array([1.0, 1.0, fd["zaniso"]])
+        dist, _ = cKDTree(fd["samples"] * sc).query(G * sc)
+        alpha = alpha * (1.0 - fd["strength"] * np.clip(dist / fd["ref"], 0.0, 1.0)).reshape(nz, ny, nx)
+    alpha = np.clip(alpha * min(max(float(density), 0.05), 1.0), 0.0, 1.0)
+    if not (alpha > 0.01).any():
+        return False
+    table = np.linspace(cmin, cmax, 256)
+    cols = np.empty((256, 3))
+    for i, v in enumerate(table):
+        rgb = [0.0, 0.0, 0.0]
+        lut.GetColor(float(v), rgb)
+        cols[i] = rgb
+    pos = np.clip((vals - cmin) / max(cmax - cmin, 1e-12), 0.0, 1.0) * 255.0
+    rgba = np.empty((nz, ny, nx, 4), dtype=np.uint8)
+    for k in range(3):
+        rgba[..., k] = np.round(np.interp(pos, np.arange(256), cols[:, k]) * 255).astype(np.uint8)
+    rgba[..., 3] = np.round(alpha * 255).astype(np.uint8)
+    img = vtkImageData()
+    img.SetDimensions(nx, ny, nz)
+    img.SetOrigin(float(xs[0]), float(ys[0]), float(zs[0]) * ve)
+    img.SetSpacing(float(xs[1] - xs[0]), float(ys[1] - ys[0]), float(zs[1] - zs[0]) * ve)
+    arr = numpy_to_vtk(rgba.reshape(-1, 4), deep=1)
+    arr.SetName("cloud")
+    img.GetPointData().SetScalars(arr)
+    mp = vtkSmartVolumeMapper()
+    mp.SetInputData(img)
+    prop = vtkVolumeProperty()
+    prop.IndependentComponentsOff()
+    from vtkmodules.vtkCommonDataModel import vtkPiecewiseFunction
+    ramp = vtkPiecewiseFunction()                       # opacity of an RGBA voxel = its own alpha (the default function would make everything opaque)
+    ramp.AddPoint(0.0, 0.0)
+    ramp.AddPoint(255.0, 1.0)
+    prop.SetScalarOpacity(ramp)
+    prop.SetInterpolationTypeToLinear()
+    prop.ShadeOff()
+    cell = float(min(xs[1] - xs[0], ys[1] - ys[0]))
+    prop.SetScalarOpacityUnitDistance(cell * 0.7)
+    vol = vtkVolume()
+    vol.SetMapper(mp)
+    vol.SetProperty(prop)
+    ren.AddVolume(vol)
+    if registry is not None:
+        registry.append({"name": name, "actors": [vol], "fade": False})
+    return True
+
+
+def add_boundary(ren, parts, surface, info, ve, o, registry=None):
+    """Drapes outlines (list of (n, 2) arrays) over the DEM: every point gets the surface height (plus a small lift).
+    Returns notes."""
+    from scipy.interpolate import RegularGridInterpolator
+    from vtkmodules.util.numpy_support import numpy_to_vtkIdTypeArray
+    if not parts or surface is None or not info or "origin" not in info:
+        return []
+    x0, y0, z0 = info["origin"]
+    sx, sy, sz = np.asarray(surface[0], float), np.asarray(surface[1], float), np.asarray(surface[2], float)
+    if sz.shape != (len(sy), len(sx)) or len(sx) < 2 or len(sy) < 2:
+        return []
+    f = RegularGridInterpolator((sy, sx), sz, bounds_error=False, fill_value=np.nan, method="linear")
+    step = max(min(abs(sx[1] - sx[0]), abs(sy[1] - sy[0])) / 2.0, 1e-6)
+    lift = float(o.get("lift", 0.3))
+    pts, cells, n_pts, n_lines = [], [], 0, 0
+    for P in parts:
+        seg = np.hypot(np.diff(P[:, 0]), np.diff(P[:, 1]))
+        xs_, ys_ = [P[0, 0]], [P[0, 1]]
+        for i, L in enumerate(seg):
+            k = max(int(np.ceil(L / step)), 1)
+            t = np.arange(1, k + 1) / k
+            xs_.extend(P[i, 0] + (P[i + 1, 0] - P[i, 0]) * t)
+            ys_.extend(P[i, 1] + (P[i + 1, 1] - P[i, 1]) * t)
+        x, y = np.array(xs_), np.array(ys_)
+        z = f(np.column_stack([y, x]))
+        ok = np.isfinite(z)
+        if ok.sum() < 2:
+            continue
+        xyz = np.column_stack([x - x0, y - y0, (z + lift - z0) * ve])
+        idx = np.arange(len(x))
+        for run in np.split(idx, np.nonzero(~ok)[0]):
+            run = run[ok[run]] if len(run) else run
+            if len(run) >= 2:
+                cells.append(np.concatenate([[len(run)], run + n_pts]))
+                n_lines += 1
+        pts.append(xyz)
+        n_pts += len(x)
+    if not n_lines:
+        return ["The site boundary does not overlap the DEM."]
+    vp = vtkPoints()
+    vp.SetData(numpy_to_vtk(np.vstack(pts).astype(np.float32), deep=1))
+    pd = vtkPolyData()
+    pd.SetPoints(vp)
+    ca = vtkCellArray()
+    ca.ImportLegacyFormat(numpy_to_vtkIdTypeArray(np.concatenate(cells).astype(np.int64), deep=1))
+    pd.SetLines(ca)
+    mp = vtkPolyDataMapper()
+    mp.SetInputData(pd)
+    mp.ScalarVisibilityOff()
+    act = vtkActor()
+    act.SetMapper(mp)
+    pr = act.GetProperty()
+    c = o.get("colour", (0.88, 0.1, 0.2))
+    pr.SetColor(*c)
+    pr.SetLineWidth(float(o.get("width", 3.0)))
+    pr.SetLighting(False)
+    try:
+        pr.RenderLinesAsTubesOn()
+    except Exception:
+        _log.debug("tube rendering unavailable", exc_info=True)
+    ren.AddActor(act)
+    if registry is not None:
+        registry.append({"name": "Site boundary", "actors": [act], "fade": False})
+    return ["Site boundary draped on the DEM (%d line(s))." % n_lines]
 
 
 def add_fence(ren, model, info, ve, polylines, registry=None):
@@ -1190,6 +1677,17 @@ def add_fence(ren, model, info, ve, polylines, registry=None):
         total_len += total
         n = max(int(total / step) + 1, 2)
         dist = np.unique(np.concatenate([np.linspace(0.0, total, n), cum]))
+        if model.get("hull"):
+            # add the exact points where the line crosses the outline, so the panels end on it
+            from . import model as _m
+            extra = []
+            for p0, nrm in _m.hull_edges(model):
+                f = (P[:, 0] - p0[0]) * nrm[0] + (P[:, 1] - p0[1]) * nrm[1]
+                for i in range(len(P) - 1):
+                    if f[i] * f[i + 1] < 0:
+                        extra.append(cum[i] + (cum[i + 1] - cum[i]) * f[i] / (f[i] - f[i + 1]))
+            if extra:
+                dist = np.unique(np.concatenate([dist, np.array(extra)]))
         x = np.interp(dist, cum, P[:, 0])
         y = np.interp(dist, cum, P[:, 1])
         tops = section.sample_model(model, x, y)
@@ -1440,6 +1938,12 @@ LEGEND_POSITIONS = [("right", "Right, middle"), ("left", "Left, middle"), ("top_
                     ("bottom_right", "Bottom right"), ("bottom_left", "Bottom left"), ("top", "Top, centre"), ("bottom", "Bottom, centre")]
 
 
+def _wrap_title(t):
+    """A long title such as 'PFOS (mg/kg)' goes on two lines, so it fits inside the colour bar box."""
+    t = str(t or "")
+    return t.replace(" (", "\n(", 1) if len(t) > 11 and " (" in t and "\n" not in t else t
+
+
 def style_plume_bar(bar, o, fg, dpr=1.0, title=None):
     """Size, shape, orientation, position and text of the plume colour bar (the legend of the samples and shells)."""
     o = o or {}
@@ -1466,12 +1970,12 @@ def style_plume_bar(bar, o, fg, dpr=1.0, title=None):
     steps = int(o.get("steps", 0))
     bar.SetMaximumNumberOfColors(steps if steps >= 2 else 256)
     if title is not None:
-        bar.SetTitle(title)
+        bar.SetTitle(_wrap_title(title))
     custom = o.get("mode") == "custom"
     rgb = tuple(o.get("colour", (0, 0, 0))) if custom else tuple(fg)
     fam = o.get("font", "arial")
     bar.UnconstrainedFontSizeOn()
-    for tp, size in ((bar.GetTitleTextProperty(), o.get("title_size", 14)), (bar.GetLabelTextProperty(), o.get("label_size", 12))):
+    for tp, size in ((bar.GetTitleTextProperty(), o.get("title_size", 12)), (bar.GetLabelTextProperty(), o.get("label_size", 11))):
         (tp.SetFontFamilyToTimes if fam == "times" else tp.SetFontFamilyToCourier if fam == "courier" else tp.SetFontFamilyToArial)()
         tp.SetFontSize(int(round(float(size) * max(dpr, 0.5))))
         tp.SetColor(*rgb)
@@ -1501,7 +2005,7 @@ def restyle_sample_labels(entry, o, fg, dpr=1.0):
     rgb = tuple(o.get("colour", (0, 0, 0))) if custom else tuple(fg)
     lum = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
     bg = (1.0, 1.0, 1.0) if lum < 0.5 else (0.05, 0.06, 0.08)
-    size = int(round(float(o.get("size", 13)) * max(dpr, 0.5)))
+    size = int(round(float(o.get("size", 11)) * max(dpr, 0.5)))
     off = 12.0 * float(o.get("offset", 1.0))          # pixels away from the sample, diagonally up and to the right
     dxy = int(round(0.7071 * off * max(dpr, 0.5)))
     fam = o.get("font", "arial")
@@ -1522,10 +2026,83 @@ def restyle_sample_labels(entry, o, fg, dpr=1.0):
         tp.SetBackgroundOpacity(0.6 if o.get("background", True) else 0.0)
         texts.append(text)
     entry["labels3d"] = [(t, x, y, z) for t, (_, x, y, z) in zip(texts, entry["labels3d"])]
+    entry["declutter"] = bool(o.get("declutter", True))
+    entry["size_px"] = size
+    entry["off_px"] = dxy
     entry["label_style"] = {"auto": not custom, "color": "#%02x%02x%02x" % tuple(int(round(c * 255)) for c in rgb),
-                            "size": float(o.get("size", 13)), "font": _FONTS_CSS.get(fam, _FONTS_CSS["arial"]),
+                            "size": float(o.get("size", 11)), "font": _FONTS_CSS.get(fam, _FONTS_CSS["arial"]),
                             "bold": bool(o.get("bold", False)), "italic": bool(o.get("italic", False)),
                             "background": bool(o.get("background", True)), "offset": round(0.7071 * off, 1)}
+
+
+def restyle_hole_labels(entry, o, fg, dpr=1.0):
+    """Applies font, size, colour and background to the borehole names already in the scene (no rebuild needed)."""
+    custom = o.get("mode") == "custom"
+    rgb = tuple(o.get("colour", (0, 0, 0))) if custom else tuple(fg)
+    lum = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
+    bg = (1.0, 1.0, 1.0) if lum < 0.5 else (0.05, 0.06, 0.08)
+    size = int(round(float(o.get("size", 13)) * max(dpr, 0.5)))
+    sc = max(dpr, 0.5)
+    offx = int(round(float(o.get("dx", 6.0)) * sc))
+    offy = int(round(float(o.get("dy", 6.0)) * sc))
+    fam = o.get("font", "arial")
+    for ta in entry.get("actors") or []:
+        ta.SetDisplayOffset(offx, offy)
+        tp = ta.GetTextProperty()
+        (tp.SetFontFamilyToTimes if fam == "times" else tp.SetFontFamilyToCourier if fam == "courier" else tp.SetFontFamilyToArial)()
+        tp.SetFontSize(size)
+        tp.SetColor(*rgb)
+        tp.SetBold(bool(o.get("bold", True)))
+        tp.SetItalic(bool(o.get("italic", False)))
+        tp.SetBackgroundColor(*bg)
+        tp.SetBackgroundOpacity(0.45 if o.get("background", True) else 0.0)
+    entry["declutter"] = bool(o.get("declutter", True))
+    entry["size_px"] = size
+    entry["off_px"] = offx
+    entry["off_x_px"], entry["off_y_px"] = offx, offy
+
+
+def _declutter(entry):
+    """Hides result labels that would sit on top of a label with a higher result, so the picture stays readable.
+    Runs before every render; the labels come back when you zoom in or turn the view."""
+    ren, acts = entry.get("ren"), entry.get("actors") or []
+    try:
+        if ren is None or not acts:
+            return
+        if not ren.HasViewProp(acts[0]):                 # the scene was redrawn: this entry is gone
+            tag = entry.pop("dtag", None)
+            if tag is not None:
+                ren.RemoveObserver(tag)
+            return
+        if not entry.get("user_visible", True):          # the layer is switched off by the user
+            return
+        hid = entry.get("cut_hidden") or ()
+        if not entry.get("declutter", True) or len(acts) > 600:
+            for i, a in enumerate(acts):
+                a.SetVisibility(0 if i in hid else 1)
+            return
+        size, off = float(entry.get("size_px", 12)), float(entry.get("off_px", 8))
+        offx, offy = float(entry.get("off_x_px", off)), float(entry.get("off_y_px", off))
+        vals = entry.get("label_vals") or []
+        order = sorted(range(len(acts)), key=lambda i: -(vals[i][0] if i < len(vals) and not vals[i][1] else -1.0))
+        kept = []
+        for i in order:
+            a = acts[i]
+            if i in hid:                                 # on the cut-away side
+                a.SetVisibility(0)
+                continue
+            x, y, z = a.GetPosition()
+            ren.SetWorldPoint(x, y, z, 1.0)
+            ren.WorldToDisplay()
+            dx, dy, _ = ren.GetDisplayPoint()
+            w, h = 0.62 * size * max(len(a.GetInput() or ""), 1) + 8.0, 1.5 * size
+            box = (dx + offx, dy + offy - h / 2.0, dx + offx + w, dy + offy + h / 2.0)
+            hit = any(box[0] < k[2] and box[2] > k[0] and box[1] < k[3] and box[3] > k[1] for k in kept)
+            a.SetVisibility(0 if hit else 1)
+            if not hit:
+                kept.append(box)
+    except Exception:
+        _log.debug("could not tidy the result labels", exc_info=True)
 
 
 def add_sample_labels(ren, pl, nd, ve, o, registry, fg, dpr=1.0, name="Plume sample labels"):
@@ -1541,8 +2118,9 @@ def add_sample_labels(ren, pl, nd, ve, o, registry, fg, dpr=1.0, name="Plume sam
         acts.append(ta)
         l3d.append(("", float(x), float(y), float(z * ve)))
         vals.append((float(c), bool(flag)))
-    entry = {"name": name, "actors": acts, "fade": False, "labels3d": l3d, "label_vals": vals}
+    entry = {"name": name, "actors": acts, "fade": False, "labels3d": l3d, "label_vals": vals, "ren": ren}
     restyle_sample_labels(entry, o, fg, dpr)
+    entry["dtag"] = ren.AddObserver("StartEvent", lambda *a, e=entry: _declutter(e))
     if registry is not None:
         registry.append(entry)
     return entry
@@ -1597,9 +2175,9 @@ def add_gw_plume(ren, rows, nd, info, ve, o, registry, fg, dpr=1.0):
     # colour bar
     bar = vtkScalarBarActor()
     bar.SetLookupTable(lut)
-    bar.SetTitle(o.get("title") or "Concentration")
+    bar.SetTitle(_wrap_title(o.get("title") or "Concentration"))
     style_plume_bar(bar, o.get("legend"), fg, dpr, o.get("title"))
-    ren.AddActor2D(bar)
+    ren.AddViewProp(bar)
     if registry is not None:
         registry.append({"name": "Plume scale bar", "actors": [bar], "fade": False})
     # labels at the middle of every screen
@@ -1637,20 +2215,31 @@ def add_gw_plume(ren, rows, nd, info, ve, o, registry, fg, dpr=1.0):
     img, pinfo = _plume_grid(P, ve, o.get("influence", 0.0), o.get("method", "kriging"), o.get("detail", 48), o.get("zaniso", 3.0),
                              ground, water, hull, water_below=True, bottom=bottom)
     _keep_volume(info, "gw", pinfo, cmax)
+    fd = _fade_ctx(o.get("fade"), pinfo, o.get("influence", 0.0), P, ve, o.get("zaniso", 3.0))
+    if fd:
+        notes.append(fd["note"])
     nt = _plume_method_note(pinfo, o.get("method", "kriging"), dict(o, water=None))
     nt = "Groundwater " + (nt[0].lower() + nt[1:])
     notes.append(nt[:-1] + (", kept below the groundwater surface" if water is not None else "")
                  + (", cut at the bottom of the wells" if bottom is not None else "") + ".")
+    if o.get("display") == "cloud":
+        base = o.get("base", 0.0) if o.get("base", 0.0) > 0 else 0.05 * cmax
+        if _add_cloud(ren, pinfo, lut, cmin, cmax, base, fd, ve, o.get("smooth", 0), o.get("density", 0.8), registry, "Groundwater plume cloud", levels=levels):
+            notes.append("Groundwater plume cloud from %.4g (faint) to %.4g (dense), data range %.4g to %.4g." % (base, cmax, cmin, cmax))
+        else:
+            notes.append("No groundwater plume cloud could be drawn above %.4g (data range %.4g to %.4g)." % (base, cmin, cmax))
+        return notes
     drawn = []
     for j, level in enumerate(levels):
-        poly = _clip_ground(_smooth_poly(_contour(img, level), o.get("smooth", 0)), pinfo["clip"])
+        poly, prgb = _shell_build(img, pinfo, level, levels[j + 1] if (shells.get("on") and j + 1 < len(levels)) else None, o.get("smooth", 0), ve, lut, cmin, cmax,
+                                  o.get("cap", True), o.get("cutcol", True))
         if poly.GetNumberOfCells() == 0:
             continue
         rgb = [0.0, 0.0, 0.0]
         lut.GetColor(float(min(max(level, cmin), cmax)), rgb)
         sm = vtkPolyDataMapper()
         sm.SetInputData(poly)
-        sm.ScalarVisibilityOff()
+        _apply_fade(sm, poly, rgb, fd, prgb)
         sa = vtkActor()
         sa.SetMapper(sm)
         sa.GetProperty().SetColor(*rgb)

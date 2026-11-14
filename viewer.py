@@ -11,8 +11,9 @@ from qgis.PyQt.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
                                  QPlainTextEdit, QLineEdit, QHeaderView, QDialog)
 from qgis.core import Qgis, QgsProject, QgsApplication, QgsVectorLayer, QgsCoordinateTransform, QgsPointXY
 from qgis.gui import QgsMapLayerComboBox, QgsFieldComboBox, QgsColorButton, QgsCollapsibleGroupBox
-from . import data, builders, demo
+from . import data, builders, demo, panelstyle
 from . import model as strat
+from . import model as _model_mod
 from . import cut as cutmod
 
 G_ID = ("hole_id", "holeid", "bh_id", "borehole", "id", "name")
@@ -189,7 +190,7 @@ def _hex_rgb(h):
 def _default_lith_style():
     return {"colours": {}, "labels": {}, "show": {}, "order": [],
             "legend": {"show": True, "title": "", "corner": "bottom-left", "scale": 1.0, "background": True, "border": False,
-                       "text_size": 16, "symbol_size": 14, "gap": 8, "spacing": 6, "padding": 8, "text_mode": "auto",
+                       "text_size": 12, "symbol_size": 11, "gap": 8, "spacing": 6, "padding": 8, "text_mode": "auto",
                        "text_colour": (0.0, 0.0, 0.0), "bold": False, "italic": False, "font": "arial",
                        "shape": "square"}}
 
@@ -242,12 +243,38 @@ class _InfoWindow(QDialog):
         v.setContentsMargins(6, 6, 6, 6)
         v.addWidget(box, 1)
         h = QHBoxLayout()
+        self.err_text = ""
+        self.btn_mail = QPushButton("Report this problem by e-mail")
+        self.btn_mail.setToolTip("Opens an e-mail to the author with the error and the program versions (your user name is removed). "
+                                 "Nothing is sent until you press Send in your mail program. The full details are also copied.")
+        self.btn_mail.clicked.connect(self._mail)
+        self.btn_copy = QPushButton("Copy details")
+        self.btn_copy.clicked.connect(self._copy)
+        self.btn_mail.hide()
+        self.btn_copy.hide()
+        h.addWidget(self.btn_mail)
+        h.addWidget(self.btn_copy)
         h.addStretch(1)
         b = QPushButton("Close")
         b.clicked.connect(self.hide)
         h.addWidget(b)
         v.addLayout(h)
         self.resize(680, 320)
+
+    def set_error(self, text):
+        """Shows the report buttons when the message is an error (it carries a traceback)."""
+        on = bool(text) and "Traceback" in text
+        self.err_text = text if on else ""
+        self.btn_mail.setVisible(on)
+        self.btn_copy.setVisible(on)
+
+    def _mail(self):
+        from . import report
+        report.send_mail(self.err_text)
+
+    def _copy(self):
+        from . import report
+        report.copy_details(self.err_text)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -292,7 +319,10 @@ class _Accordion(QWidget):
         btn = QPushButton("  " + title)
         btn.setIcon(icon)
         btn.setCheckable(True)
-        btn.setStyleSheet("QPushButton { text-align: left; padding: 7px 8px; font-weight: bold; }")
+        btn.setObjectName("avSection")
+        self._plain_btn_style = "QPushButton { text-align: left; padding: 7px 8px; font-weight: bold; }"
+        btn.setProperty("plainStyle", self._plain_btn_style)
+        btn.setStyleSheet(self._plain_btn_style)
         idx = len(self._items)
         btn.clicked.connect(lambda checked=False, i=idx: self.toggle(i))
         body.setVisible(False)
@@ -361,6 +391,7 @@ class SubsurfaceDock(QDockWidget):
         split = QSplitter(Qt.Orientation.Horizontal)
         split.addWidget(self._build_left())
         self.tabs = QTabWidget()
+        self.tabs.setObjectName("avTabs")
         self.view_holder = QWidget()
         self.view_layout = QVBoxLayout(self.view_holder)
         self.view_layout.setContentsMargins(0, 0, 0, 0)
@@ -379,12 +410,15 @@ class SubsurfaceDock(QDockWidget):
         self.setWidget(root)
         self._update_title()
         self._tabs_vis_changed()                    # the 2D View and Tables tabs start closed (open them in Tools)
+        self._style_panel()
 
     # ------------------------------------------------------------ toolbar
     def _build_toolbar(self):
         bar = QWidget()
+        bar.setObjectName("avBar")
+        self._toolbar = bar
         h = QHBoxLayout(bar)
-        h.setContentsMargins(2, 2, 2, 2)
+        h.setContentsMargins(6, 6, 6, 6)
         h.setSpacing(4)
 
         def tb(icon, tip, slot, text=""):
@@ -419,6 +453,13 @@ class SubsurfaceDock(QDockWidget):
         h.addWidget(QLabel("Theme"))
         self.cmb_theme = QComboBox()
         self.cmb_theme.addItems(["Light", "Dark"])
+        try:
+            from qgis.core import QgsSettings
+            if str(QgsSettings().value("AVGeoTools3D/theme", "light")) == "dark":
+                self.theme = "dark"
+                self.cmb_theme.setCurrentIndex(1)
+        except Exception:
+            _log.debug("could not read saved theme", exc_info=True)
         self.cmb_theme.currentIndexChanged.connect(self._theme_changed)
         h.addWidget(self.cmb_theme)
         h.addSpacing(8)
@@ -441,6 +482,13 @@ class SubsurfaceDock(QDockWidget):
         """A group box that opens and closes, holding forms / layouts / widgets, added to layout v."""
         gb = QgsCollapsibleGroupBox(title)
         gb.setCollapsed(collapsed)
+        gb.setProperty("avCollapsed", bool(collapsed))
+
+        def _mark(c, g=gb):                                # lets the panel style show a collapsed box as a plain title line
+            g.setProperty("avCollapsed", bool(c))
+            g.style().unpolish(g)
+            g.style().polish(g)
+        gb.collapsedStateChanged.connect(_mark)
         gl = QVBoxLayout(gb)
         for part in parts:
             if isinstance(part, QWidget):
@@ -456,8 +504,9 @@ class SubsurfaceDock(QDockWidget):
         acc.add("Drillholes", _ico("/mActionAddOgrLayer.svg"), self._sec_drill())
         acc.add("Geological Models", _ico("/mActionShowAllLayers.svg"), self._sec_model())
         acc.add("Fence diagram", _ico("/mActionAddMeshLayer.svg"), self._sec_fence())
-        acc.add("Cut-away", _ico("/mActionEditCut.svg"), self._sec_cut())
+        cut_body = self._sec_cut()              # built first (as before), shown after the Plumes section
         acc.add("Plumes", _ico("/mActionAddPointCloudLayer.svg"), self._sec_plume())
+        acc.add("Cut-away", _ico("/mActionEditCut.svg"), cut_body)
         acc.add("Tools", _ico("/mActionOptions.svg"), self._sec_tools())
         self.acc = acc
         self.cb_collar.layerChanged.connect(self._clear_model)
@@ -466,13 +515,35 @@ class SubsurfaceDock(QDockWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setMinimumWidth(290)
+        scroll.setObjectName("avLeft")
+        self._left_scroll = scroll
         host = QWidget()
+        host.setObjectName("avHost")
         vl = QVBoxLayout(host)
         vl.setContentsMargins(0, 0, 4, 0)
         vl.addWidget(acc)
         vl.addStretch(1)
         scroll.setWidget(host)
         return scroll
+
+    def _style_panel(self, *args):
+        """The modern look of the left panel (soft cards, rounded boxes, blue accent); off = the plain QGIS look."""
+        sc = getattr(self, "_left_scroll", None)
+        if sc is None:
+            return
+        on = getattr(self, "chk_modern", None) is None or self.chk_modern.isChecked()
+        for btn, _body in getattr(self.acc, "_items", []):                # the section buttons carry their own plain style when it is off
+            btn.setStyleSheet("" if on else (btn.property("plainStyle") or ""))
+        sc.setStyleSheet(panelstyle.panel_qss(self.theme == "dark") if on else "")
+        bar = getattr(self, "_toolbar", None)
+        if bar is not None:
+            for b in bar.findChildren(QPushButton):
+                if b.text().strip() == "Update model":
+                    b.setObjectName("avPrimary")
+            bar.setStyleSheet(panelstyle.toolbar_qss(self.theme == "dark") if on else "")
+        tabs = getattr(self, "tabs", None)
+        if tabs is not None:
+            tabs.setStyleSheet(panelstyle.tabs_qss(self.theme == "dark") if on else "")
 
     def _body(self):
         w = QWidget()
@@ -485,11 +556,36 @@ class SubsurfaceDock(QDockWidget):
         f_dem, f_gw, f_gc = _form(), _form(), _form()
         self.cb_raster = _layer_combo(Qgis.LayerFilter.RasterLayer)
         f_dem.addRow("DEM raster", self.cb_raster)
+        self.sp_demoff = _spin(-200.0, 200.0, 0.0, 2, 0.5)
+        self.sp_demoff.setToolTip("Moves the whole DEM up (+) or down (-) in metres. The plume cut and the geology cut follow it. "
+                                  "Press Update model after changing.")
+        f_dem.addRow("DEM height adjustment (m)", self.sp_demoff)
+        self.sp_modgap = _spin(0.0, 50.0, 0.3, 2, 0.1)
+        self.sp_modgap.setToolTip("The geology model is kept at least this far below the DEM (metres), so no rock shows above the ground.")
+        f_dem.addRow("Keep geology below the DEM by (m)", self.sp_modgap)
         self.cb_drape = _layer_combo(Qgis.LayerFilter.RasterLayer)
         self.cb_drape.setToolTip("A satellite or aerial picture to drape over the DEM: a georeferenced image, or a web map "
                                  "(XYZ tiles such as satellite imagery) from your QGIS project.")
+        self.cb_bound = _layer_combo(Qgis.LayerFilter.PolygonLayer | Qgis.LayerFilter.LineLayer)
+        self.cb_bound.setToolTip("A polygon or line layer (for example the site boundary) drawn on top of the DEM surface. "
+                                 "Layers in another coordinate system are converted automatically.")
+        self.btn_bcol = QgsColorButton()
+        self.btn_bcol.setAllowOpacity(False)
+        self.btn_bcol.setColor(QColor(225, 25, 50))
+        self.sp_bwidth = _spin(1.0, 15.0, 3.0, 1, 0.5)
+        self.sp_blift = _spin(0.0, 50.0, 0.3, 2, 0.1)
+        self.sp_blift.setToolTip("Lifts the line this far above the surface (metres), so it does not sink into it.")
+        for w_ in (self.btn_bcol.colorChanged,):
+            w_.connect(self._boundary_changed)
+        self.cb_bound.layerChanged.connect(self._boundary_changed)
+        self.sp_bwidth.editingFinished.connect(self._boundary_changed)
+        self.sp_blift.editingFinished.connect(self._boundary_changed)
         self.sp_drape = _spin(512.0, 4096.0, 2048.0, 0, 512.0)
         self.sp_drape.setToolTip("Picture size in pixels along its longer side. Bigger is sharper but slower to fetch and draw.")
+        f_dem.addRow("Site boundary on the DEM (polygon or line layer)", self.cb_bound)
+        f_dem.addRow("Boundary colour", self.btn_bcol)
+        f_dem.addRow("Boundary line width (px)", self.sp_bwidth)
+        f_dem.addRow("Boundary lift above the surface (m)", self.sp_blift)
         f_dem.addRow("Satellite / aerial image on the DEM", self.cb_drape)
         f_dem.addRow("Image detail (pixels, longer side)", self.sp_drape)
         self.cb_drape.layerChanged.connect(self._drape_changed)
@@ -608,6 +704,46 @@ class SubsurfaceDock(QDockWidget):
         self.sp_rad = _spin(0.1, 50.0, 1.0, 2, 0.5)
         self.sp_rad.editingFinished.connect(self._size_changed)
         f_r.addRow("Borehole radius (1 = auto)", self.sp_rad)
+        # names written next to the boreholes
+        self.sp_hlsize = _spin(6.0, 48.0, 13.0, 0, 1.0)
+        self.cmb_hlcol = QComboBox()
+        self.cmb_hlcol.addItem("Automatic (follows the theme)", "auto")
+        self.cmb_hlcol.addItem("My colour", "custom")
+        self.btn_hlcol = QgsColorButton()
+        self.btn_hlcol.setAllowOpacity(False)
+        self.btn_hlcol.setColor(QColor(0, 0, 0))
+        self.btn_hlcol.setEnabled(False)
+        self.cmb_hlfont = QComboBox()
+        for label, key in (("Arial", "arial"), ("Times", "times"), ("Courier", "courier")):
+            self.cmb_hlfont.addItem(label, key)
+        self.chk_hlbold = QCheckBox("Bold")
+        self.chk_hlbold.setChecked(True)
+        self.chk_hlital = QCheckBox("Italic")
+        self.chk_hlbg = QCheckBox("Background behind the text")
+        self.chk_hlbg.setChecked(True)
+        self.chk_hldecl = QCheckBox("Hide names that overlap")
+        self.chk_hldecl.setChecked(True)
+        self.sp_hlx = _spin(-300.0, 300.0, 6.0, 0, 2.0)
+        self.sp_hlx.setToolTip("Moves each name sideways from its borehole, in pixels. Plus = right, minus = left.")
+        self.sp_hly = _spin(-300.0, 300.0, 6.0, 0, 2.0)
+        self.sp_hly.setToolTip("Moves each name up or down from its borehole, in pixels. Plus = up, minus = down.")
+        hlh = QHBoxLayout()
+        hlh.addWidget(self.chk_hlbold)
+        hlh.addWidget(self.chk_hlital)
+        hlh.addStretch(1)
+        f_r.addRow("Name size (px)", self.sp_hlsize)
+        f_r.addRow("Name font", self.cmb_hlfont)
+        f_r.addRow("Name colour", self.cmb_hlcol)
+        f_r.addRow("My colour", self.btn_hlcol)
+        f_r.addRow(hlh)
+        f_r.addRow(self.chk_hlbg)
+        f_r.addRow(self.chk_hldecl)
+        f_r.addRow("Name horizontal offset (px)", self.sp_hlx)
+        f_r.addRow("Name vertical offset (px)", self.sp_hly)
+        for sig in (self.cmb_hlcol.currentIndexChanged, self.btn_hlcol.colorChanged, self.sp_hlsize.valueChanged,
+                    self.cmb_hlfont.currentIndexChanged, self.chk_hlbold.toggled, self.chk_hlital.toggled,
+                    self.chk_hlbg.toggled, self.chk_hldecl.toggled, self.sp_hlx.valueChanged, self.sp_hly.valueChanged):
+            sig.connect(self._hlabels_changed)
         self._gbox(v, "Collars", True, f_c)
         self._gbox(v, "Lithology log", True, f_l)
         self._gbox(v, "Boreholes on screen", True, self._rows("drill"), f_r)
@@ -665,7 +801,7 @@ class SubsurfaceDock(QDockWidget):
         for label, key in (("Bottom left", "bottom-left"), ("Bottom right", "bottom-right"),
                            ("Top left", "top-left"), ("Top right", "top-right")):
             self.cmb_lcorner.addItem(label, key)
-        self.sp_ltext = _spin(6.0, 80.0, 16.0, 0, 1.0)
+        self.sp_ltext = _spin(6.0, 80.0, 12.0, 0, 1.0)
         self.cmb_ltextcol = QComboBox()
         for label, key in (("Automatic (follows the theme)", "auto"), ("Same colour as the unit", "unit"), ("My colour", "custom")):
             self.cmb_ltextcol.addItem(label, key)
@@ -681,7 +817,7 @@ class SubsurfaceDock(QDockWidget):
         fh.addWidget(self.chk_lbold)
         fh.addWidget(self.chk_lital)
         fh.addStretch(1)
-        self.sp_lsym = _spin(4.0, 80.0, 14.0, 0, 1.0)
+        self.sp_lsym = _spin(4.0, 80.0, 11.0, 0, 1.0)
         self.cmb_lshape = QComboBox()
         self.cmb_lshape.addItem("Square", "square")
         self.cmb_lshape.addItem("Circle", "circle")
@@ -904,12 +1040,25 @@ class SubsurfaceDock(QDockWidget):
         for key, label in strat.METHODS.items():
             self.cmb_interp.addItem(label, key)
             self.cmb_interp.setItemData(self.cmb_interp.count() - 1, tips[key], Qt.ItemDataRole.ToolTipRole)
+        self.cmb_interp.setCurrentIndex(max(self.cmb_interp.findData("kriging"), 0))
         self.sp_mn = _spin(5.0, 120.0, 50.0, 0, 5.0)
         self.sp_mm = _spin(0.0, 100.0, 10.0, 0, 5.0)
         f.addRow("Model type", self.cmb_mtype)
         f.addRow("Interpolation between boreholes", self.cmb_interp)
         f.addRow("Grid cells along X and Y", self.sp_mn)
         f.addRow("Extend beyond boreholes (% of site)", self.sp_mm)
+        self.chk_mhull = QCheckBox("Limit the model to the outline of the boreholes (convex hull)")
+        self.chk_mhull.setChecked(True)
+        self.chk_mhull.setToolTip("The geology only exists inside the convex hull of all boreholes with lithology; "
+                                  "outside it nothing is drawn. Press Update model after changing.")
+        self.sp_mhm = _spin(0.0, 1000.0, 0.0, 1, 5.0)
+        self.sp_mhm.setToolTip("Pushes the outline outward by this many metres (0 = exactly through the outer boreholes).")
+        f.addRow(self.chk_mhull)
+        f.addRow("Outline margin (m)", self.sp_mhm)
+        self.sp_msm = _spin(0.0, 4.0, 1.0, 1, 0.5)
+        self.sp_msm.setToolTip("Rounds off the geology solids so they look smooth instead of faceted (in model cells; 0 = off). "
+                               "Layer order is kept. Press Update model after changing.")
+        f.addRow("Smooth geology solids", self.sp_msm)
         self.cmb_interp.currentIndexChanged.connect(self._mark_model_stale)
         self.sp_mn.valueChanged.connect(self._mark_model_stale)
         self.sp_mm.valueChanged.connect(self._mark_model_stale)
@@ -1180,7 +1329,7 @@ class SubsurfaceDock(QDockWidget):
 
     def _fill_cut_layers(self, registry):
         """After a draw: list the elements that can be cut (state is remembered by name)."""
-        names = [e["name"] for e in registry if (self.cutter is not None and e["name"] in self.cutter.items)
+        names = [e["name"] for e in registry if (self.cutter is not None and (e["name"] in self.cutter.items or e["name"] in self.cutter.labels))
                  or e["name"] == "Block model"]
         self._cut_list.blockSignals(True)
         self._cut_list.clear()
@@ -1266,7 +1415,7 @@ class SubsurfaceDock(QDockWidget):
         spec = []
         for i, (on, val, keep) in enumerate(self._cut_spec_real()):
             spec.append((on, (val - x0, val - y0, (val - z0) * ve)[i], keep))
-        self.cutter.set_planes(spec, {n for n in self.cutter.items if self._cut_layers.get(n, True)})
+        self.cutter.set_planes(spec, {n for n in list(self.cutter.items) + list(self.cutter.labels) if self._cut_layers.get(n, True)})
         if block and self._block_entry is not None:
             self._block_timer.start()
         self.vtk_widget.GetRenderWindow().Render()
@@ -1330,12 +1479,15 @@ class SubsurfaceDock(QDockWidget):
         self.btn_plcol.setAllowOpacity(False)
         self.btn_plcol.setColor(QColor(0, 0, 0))
         self.btn_plcol.setEnabled(False)
-        self.sp_plsize = _spin(6.0, 48.0, 13.0, 0, 1.0)
+        self.sp_plsize = _spin(6.0, 48.0, 11.0, 0, 1.0)
         self.cmb_plfont = QComboBox()
         for label, key in (("Arial", "arial"), ("Times", "times"), ("Courier", "courier")):
             self.cmb_plfont.addItem(label, key)
         self.chk_plbold = QCheckBox("Bold")
         self.chk_plital = QCheckBox("Italic")
+        self.chk_pldecl = QCheckBox("Hide labels that overlap (the higher result stays)")
+        self.chk_pldecl.setChecked(True)
+        self.chk_pldecl.setToolTip("When labels crowd each other, only the one with the higher result is shown. Zoom in to see the rest.")
         self.chk_plbg = QCheckBox("Background behind the text")
         self.chk_plbg.setChecked(True)
         plh = QHBoxLayout()
@@ -1348,13 +1500,48 @@ class SubsurfaceDock(QDockWidget):
                                  "1 = default distance, 0 = on top of the point, 2 = twice as far.")
         for sig in (self.ed_pname.textChanged, self.ed_punit.textChanged, self.cmb_plcol.currentIndexChanged,
                     self.btn_plcol.colorChanged, self.sp_plsize.valueChanged, self.cmb_plfont.currentIndexChanged,
-                    self.chk_plbold.toggled, self.chk_plital.toggled, self.sp_pldec.valueChanged, self.chk_plbg.toggled,
+                    self.chk_plbold.toggled, self.chk_plital.toggled, self.sp_pldec.valueChanged, self.chk_plbg.toggled, self.chk_pldecl.toggled,
                     self.sp_ploff.valueChanged):
             sig.connect(self._plabels_changed)
         self.chk_shells = QCheckBox("Nested shells (several levels)")
         self.chk_shells.setChecked(True)
         self.chk_shells.setToolTip("Draws one see-through shell for each level, from pale (low) to red (high). "
                                    "Switch off to draw a single isosurface at the lowest value.")
+        self.chk_fade = QCheckBox("Fade the shells away from the samples")
+        self.chk_fade.setChecked(True)
+        self.chk_fade.setToolTip("Shows how well the data supports each part of the plume: the shells are solid close to a sample "
+                                 "and become more see-through the further they are from the nearest sample.")
+        self.cmb_pdisp = QComboBox()
+        self.cmb_pdisp.addItem("Shells (nested surfaces)", "shells")
+        self.cmb_pdisp.addItem("Cloud (smooth volume)", "cloud")
+        self.cmb_pdisp.setToolTip("Shells: see-through surfaces at chosen levels. Cloud: the plume as a smooth glowing cloud, "
+                                  "faint at the lowest value and dense and red where the concentration is highest.")
+        self.sp_cdens = QDoubleSpinBox()
+        self.sp_cdens.setRange(5.0, 100.0)
+        self.sp_cdens.setDecimals(0)
+        self.sp_cdens.setValue(80.0)
+        self.sp_cdens.setSuffix(" %")
+        self.sp_cdens.setToolTip("How dense the cloud looks (higher = more solid).")
+        self.chk_cap = QCheckBox("Closed shells (not hollow)")
+        self.chk_cap.setChecked(True)
+        self.chk_cap.setToolTip("Where a shell is cut (ground surface, water table, below the wells, around the wells), "
+                                "the shell is closed with the cut face, so it is solid instead of hollow. Switch off for open shells.")
+        self.chk_cutcol = QCheckBox("Colour the cut faces by concentration")
+        self.chk_cutcol.setChecked(True)
+        self.chk_cutcol.setToolTip("The cut face shows the concentration as a coloured cross-section (nested bands). "
+                                   "Switch off to colour each cut face with its shell colour.")
+        self.sp_fadedist = QDoubleSpinBox()
+        self.sp_fadedist.setRange(0.0, 100000.0)
+        self.sp_fadedist.setDecimals(1)
+        self.sp_fadedist.setSuffix(" m")
+        self.sp_fadedist.setToolTip("Distance from the nearest sample at which the fade is strongest. 0 = automatic "
+                                    "(the variogram range for kriging, otherwise the influence radius).")
+        self.sp_fadestr = QDoubleSpinBox()
+        self.sp_fadestr.setRange(0.0, 95.0)
+        self.sp_fadestr.setDecimals(0)
+        self.sp_fadestr.setValue(60.0)
+        self.sp_fadestr.setSuffix(" %")
+        self.sp_fadestr.setToolTip("How much opacity is lost far from the samples (0 = no fade).")
         self._mult_texts = {"mult": "1, 2.5, 6, 15", "abs": "1, 5, 10, 50, 100"}
         self._shell_mode_prev = "mult"
         self.cmb_shellmode = QComboBox()
@@ -1410,6 +1597,13 @@ class SubsurfaceDock(QDockWidget):
             w_.editingFinished.connect(self._shells_changed)
         self.cmb_pmethod.currentIndexChanged.connect(self._shells_changed)
         self.chk_shells.toggled.connect(self._shells_changed)
+        self.chk_fade.toggled.connect(self._shells_changed)
+        self.chk_cap.toggled.connect(self._shells_changed)
+        self.chk_cutcol.toggled.connect(self._shells_changed)
+        self.cmb_pdisp.currentIndexChanged.connect(self._shells_changed)
+        self.sp_cdens.editingFinished.connect(self._shells_changed)
+        self.sp_fadedist.editingFinished.connect(self._shells_changed)
+        self.sp_fadestr.editingFinished.connect(self._shells_changed)
         self.chk_shells.toggled.connect(self._shell_mode_changed)
         self.cmb_shellmode.currentIndexChanged.connect(self._shell_mode_changed)
         self.cmb_shellmode.currentIndexChanged.connect(self._shells_changed)
@@ -1432,6 +1626,13 @@ class SubsurfaceDock(QDockWidget):
         f_est.addRow("Detail (grid cells, higher = finer but slower)", self.sp_pdetail)
         f_est.addRow("Vertical distance weight (1 = like horizontal)", self.sp_pz)
         f_shell.addRow(self.chk_shells)
+        f_shell.addRow("Plume display", self.cmb_pdisp)
+        f_shell.addRow("Cloud density", self.sp_cdens)
+        f_shell.addRow(self.chk_cap)
+        f_shell.addRow(self.chk_cutcol)
+        f_shell.addRow(self.chk_fade)
+        f_shell.addRow("Fade distance (0 = automatic)", self.sp_fadedist)
+        f_shell.addRow("Fade strength (opacity lost far from samples)", self.sp_fadestr)
         f_shell.addRow("Lowest shell value (0 = auto, 5% of the highest)", self.sp_iso)
         f_shell.addRow("Shell levels are", self.cmb_shellmode)
         f_shell.addRow(self.lbl_mult, self.ed_mult)
@@ -1460,12 +1661,13 @@ class SubsurfaceDock(QDockWidget):
         f_samp.addRow("Offset from the sample (1 = default)", self.sp_ploff)
         f_samp.addRow("Decimal places", self.sp_pldec)
         f_samp.addRow(self.chk_plbg)
+        f_samp.addRow(self.chk_pldecl)
         for title, form, collapsed, rows_key, rows_first in (
                 ("Data", f_data, True, None, False),
+                ("Samples and their results", f_samp, True, "plume_samples", True),
                 ("Estimation between samples", f_est, True, None, False),
                 ("Shells", f_shell, True, "plume_shells", False),
-                ("Limits: where the plume may extend", f_lim, True, None, False),
-                ("Samples and their results", f_samp, True, "plume_samples", True)):
+                ("Limits: where the plume may extend", f_lim, True, None, False)):
             gb = QgsCollapsibleGroupBox(title)
             gb.setCollapsed(collapsed)
             gl = QVBoxLayout(gb)
@@ -1519,6 +1721,9 @@ class SubsurfaceDock(QDockWidget):
             return (gxs, gys, strat.interp2(cp, GX, GY, "linear", set(), "Ground")), "borehole ground levels (no DEM chosen)"
         return None, ""
 
+    def _fade_opts(self):
+        return {"on": self.chk_fade.isChecked(), "dist": self.sp_fadedist.value(), "strength": self.sp_fadestr.value() / 100.0}
+
     def _gw_plume_opts(self, collars, intervals, rows, surface, gw_grid, notes):
         ground, src = (None, "")
         if self.chk_clip.isChecked():
@@ -1562,7 +1767,9 @@ class SubsurfaceDock(QDockWidget):
                 "shells": {"on": self.chk_shells.isChecked(), "mult": self._shell_mult(), "absolute": self.cmb_shellmode.currentData() == "abs"},
                 "base": self.sp_iso.value(), "method": self.cmb_pmethod.currentData(), "detail": int(self.sp_pdetail.value()),
                 "smooth": self.sp_psmooth.value(), "zaniso": self.sp_pz.value(), "influence": self.sp_infl.value(),
-                "ground": ground, "ground_source": src, "water": water, "bottom": bottom, "hull": hull}
+                "ground": ground, "ground_source": src, "water": water, "bottom": bottom, "hull": hull,
+                "fade": self._fade_opts(), "cap": self.chk_cap.isChecked(), "cutcol": self.chk_cutcol.isChecked(),
+                "display": self.cmb_pdisp.currentData(), "density": self.sp_cdens.value() / 100.0}
 
     def _conc_field(self):
         return (self.f_grc if self.cmb_ptype.currentData() == "gw" else self.f_pc).currentField()
@@ -1673,8 +1880,8 @@ class SubsurfaceDock(QDockWidget):
         self.sp_bllabels = _spin(2.0, 12.0, 5.0, 0, 1.0)
         self.sp_bldec = _spin(-1.0, 6.0, -1.0, 0, 1.0)
         self.sp_bldec.setToolTip("Decimal places of the numbers on the bar. -1 = automatic (3 significant digits).")
-        self.sp_bltsize = _spin(6.0, 48.0, 14.0, 0, 1.0)
-        self.sp_blsize = _spin(6.0, 48.0, 12.0, 0, 1.0)
+        self.sp_bltsize = _spin(6.0, 48.0, 12.0, 0, 1.0)
+        self.sp_blsize = _spin(6.0, 48.0, 11.0, 0, 1.0)
         self.cmb_blfont = QComboBox()
         for label, key in (("Arial", "arial"), ("Times", "times"), ("Courier", "courier")):
             self.cmb_blfont.addItem(label, key)
@@ -1810,7 +2017,24 @@ class SubsurfaceDock(QDockWidget):
         return {"size": self.sp_plsize.value(), "mode": self.cmb_plcol.currentData(), "colour": (c.redF(), c.greenF(), c.blueF()),
                 "font": self.cmb_plfont.currentData(), "bold": self.chk_plbold.isChecked(), "italic": self.chk_plital.isChecked(),
                 "decimals": int(self.sp_pldec.value()), "background": self.chk_plbg.isChecked(),
-                "offset": self.sp_ploff.value()}
+                "offset": self.sp_ploff.value(), "declutter": self.chk_pldecl.isChecked()}
+
+    def _hlabel_opts(self):
+        c = self.btn_hlcol.color()
+        return {"size": self.sp_hlsize.value(), "mode": self.cmb_hlcol.currentData(), "colour": (c.redF(), c.greenF(), c.blueF()),
+                "font": self.cmb_hlfont.currentData(), "bold": self.chk_hlbold.isChecked(), "italic": self.chk_hlital.isChecked(),
+                "background": self.chk_hlbg.isChecked(), "declutter": self.chk_hldecl.isChecked(), "dx": self.sp_hlx.value(), "dy": self.sp_hly.value()}
+
+    def _hlabels_changed(self, *args):
+        """Borehole names: font, size, colour and so on change on screen straight away, without a rebuild."""
+        self.btn_hlcol.setEnabled(self.cmb_hlcol.currentData() == "custom")
+        if self.vtk_widget is None or not self._was_drawn:
+            return
+        for e in getattr(self, "_registry", []):
+            if e["name"] == "Borehole labels":
+                builders.restyle_hole_labels(e, self._hlabel_opts(), builders.theme_fg(self._bgtheme()),
+                                             self.vtk_widget.devicePixelRatioF())
+        self.vtk_widget.GetRenderWindow().Render()
 
     def _plabels_changed(self, *args):
         """Font, size, colour, decimals, name and unit change the text on screen straight away, without a rebuild."""
@@ -1822,8 +2046,12 @@ class SubsurfaceDock(QDockWidget):
                 builders.restyle_sample_labels(e, self._plabel_opts(), builders.theme_fg(self._bgtheme()),
                                                self.vtk_widget.devicePixelRatioF())
             elif e["name"] == "Plume scale bar":
-                e["actors"][0].SetTitle(self.plume_title())
+                e["actors"][0].SetTitle(builders._wrap_title(self.plume_title()))
         self.vtk_widget.GetRenderWindow().Render()
+
+    def _boundary_changed(self, *args):
+        if self.vtk_widget is not None and self._was_drawn:
+            self.draw(restore=True)
 
     def _shells_changed(self, *args):
         if self.vtk_widget is not None and self._was_drawn:
@@ -2021,7 +2249,7 @@ class SubsurfaceDock(QDockWidget):
         if self.ren is None:
             return
         for a in getattr(self, "_tb_actors", []):
-            self.ren.RemoveActor2D(a)
+            self.ren.RemoveViewProp(a)
         self._tb_actors = []
         from vtkmodules.vtkRenderingCore import vtkTextActor
         fg = builders.theme_fg(self._bgtheme())
@@ -2057,7 +2285,7 @@ class SubsurfaceDock(QDockWidget):
              if a.startswith("bottom") else tp.SetVerticalJustificationToCentered)()
             ta.GetPositionCoordinate().SetCoordinateSystemToNormalizedViewport()
             ta.SetPosition(x + float(tb["nx"]) / 100.0, y + float(tb["ny"]) / 100.0)
-            self.ren.AddActor2D(ta)
+            self.ren.AddViewProp(ta)
             self._tb_actors.append(ta)
         if render and self.vtk_widget is not None:
             self.vtk_widget.GetRenderWindow().Render()
@@ -2089,8 +2317,15 @@ class SubsurfaceDock(QDockWidget):
         self.chk_tabtab.toggled.connect(self._tabs_vis_changed)
         g3.addWidget(self.chk_tab2d)
         g3.addWidget(self.chk_tabtab)
+        g4 = QVBoxLayout()
+        self.chk_modern = QCheckBox("Modern panel style")
+        self.chk_modern.setChecked(True)
+        self.chk_modern.setToolTip("Soft cards, rounded boxes and a blue accent for this panel. Untick to go back to the plain QGIS look.")
+        self.chk_modern.toggled.connect(self._style_panel)
+        g4.addWidget(self.chk_modern)
         self._gbox(v, "Prepare and export", False, g1)
         self._gbox(v, "Tabs (open or close)", True, g3)
+        self._gbox(v, "Look", True, g4)
         self._gbox(v, "Text boxes", True, self._sec_text())
         self._gbox(v, "Demo data", True, g2)
         self._gbox(v, "Axes and grid", True, self._rows("tools"))
@@ -2215,6 +2450,12 @@ class SubsurfaceDock(QDockWidget):
     def _theme_changed(self, idx):
         self.theme = "light" if idx == 0 else "dark"
         self.custom_bg = None
+        try:
+            from qgis.core import QgsSettings
+            QgsSettings().setValue("AVGeoTools3D/theme", self.theme)
+        except Exception:
+            _log.debug("could not save theme", exc_info=True)
+        self._style_panel()
         if self.vtk_widget is not None and self._was_drawn:
             self.draw(restore=True)
         else:
@@ -2244,6 +2485,10 @@ class SubsurfaceDock(QDockWidget):
         self.vtk_widget = QVTKRenderWindowInteractor(self.view_holder)
         self.view_layout.addWidget(self.vtk_widget, 1)
         self.ren = vtkRenderer()
+        try:
+            self.ren.UseFXAAOn()                       # smoother edges
+        except AttributeError:
+            _log.debug("FXAA is not available", exc_info=True)
         rw = self.vtk_widget.GetRenderWindow()
         rw.AddRenderer(self.ren)
         iren = rw.GetInteractor()
@@ -2404,6 +2649,7 @@ class SubsurfaceDock(QDockWidget):
                 if entry["fade"]:
                     transp = int(round((1.0 - actors[0].GetProperty().GetOpacity()) * 100))
                 st = self.layer_state[name] = {"visible": entry.get("default_visible", True), "transp": transp}
+            entry["user_visible"] = bool(st["visible"])
             for a in actors:
                 a.SetVisibility(1 if st["visible"] else 0)
                 if entry["fade"]:
@@ -2432,6 +2678,7 @@ class SubsurfaceDock(QDockWidget):
 
     def _set_visible(self, entry, on):
         self.layer_state.setdefault(entry["name"], {})["visible"] = bool(on)
+        entry["user_visible"] = bool(on)
         for a in entry["actors"]:
             a.SetVisibility(1 if on else 0)
         if self.vtk_widget is not None:
@@ -2450,6 +2697,8 @@ class SubsurfaceDock(QDockWidget):
     def say(self, text, warn=False):
         self.status.setText(text)
         self.status.setStyleSheet("color: #b00020;" if warn else "")
+        if getattr(self, "info_win", None) is not None:
+            self.info_win.set_error(text if warn else "")
         if warn and getattr(self, "info_win", None) is not None and not self.info_win.isVisible():       # a warning should not go unnoticed
             self.toggle_info()
 
@@ -2546,6 +2795,8 @@ class SubsurfaceDock(QDockWidget):
                 mx = max(20.0, 0.25 * max(np.ptp(a[:, 0]), np.ptp(a[:, 1])))
                 bbox = (a[:, 0].min() - mx, a[:, 1].min() - mx, a[:, 0].max() + mx, a[:, 1].max() + mx)
             surface = data.read_raster(lr, bbox)
+            if surface is not None and abs(self.sp_demoff.value()) > 1e-9:
+                surface = (surface[0], surface[1], np.asarray(surface[2], float) + self.sp_demoff.value()) + tuple(surface[3:])
             if surface is None:
                 notes.append("The DEM does not overlap your points (check the CRS).")
 
@@ -2597,6 +2848,10 @@ class SubsurfaceDock(QDockWidget):
         bgt = self._bgtheme()
         registry, info = [], {}
         use_model = self.model is not None and bool(collars)
+        self._model_draw = _model_mod.clip_to_surface(self.model, surface, self.sp_modgap.value()) if use_model else self.model
+        if use_model and self.chk_mhull.isChecked():
+            hxy = [(c[0], c[1]) for h, c in collars.items() if intervals.get(h)]
+            self._model_draw = _model_mod.limit_to_hull(self._model_draw, hxy, self.sp_mhm.value())
         notes += builders.build_scene(self.ren, collars, intervals, surface, plume,
                                       ve=self.sp_ve.value(), radius=self.sp_rad.value(), sample_radius=self.sp_prad.value(),
                                       iso=self.sp_iso.value(), influence=self.sp_infl.value(),
@@ -2605,18 +2860,32 @@ class SubsurfaceDock(QDockWidget):
                                       plume_opts={"detail": int(self.sp_pdetail.value()), "smooth": self.sp_psmooth.value(),
                                                   "zaniso": self.sp_pz.value(), "ground": ground, "ground_source": ground_src,
                                                   "water": water, "labels": self._plabel_opts(), "nd": plume_nd,
-                                                  "hull": self._hull_spec(collars, plume),
+                                                  "hull": self._hull_spec(collars, plume), "fade": self._fade_opts(), "cap": self.chk_cap.isChecked(), "cutcol": self.chk_cutcol.isChecked(),
+                                                   "display": self.cmb_pdisp.currentData(), "density": self.sp_cdens.value() / 100.0,
                                                   "dpr": self.vtk_widget.devicePixelRatioF() if self.vtk_widget is not None else 1.0},
                                       plume_title=self.plume_title(), plume_legend=self._blegend_opts(), drape=drape,
                                       shells={"on": self.chk_shells.isChecked(), "mult": self._shell_mult(), "absolute": self.cmb_shellmode.currentData() == "abs",
                                               "colours": self.cmb_shellcol.currentData()},
                                       geology={"on": False})
         self._fill_lith_table(info.get("codes") or {})
+        lb = self.cb_bound.currentLayer()
+        if lb is not None:
+            if surface is None:
+                notes.append("A site boundary is chosen but there is no DEM: choose the DEM raster first (Surfaces section).")
+            else:
+                try:
+                    cb_ = self.btn_bcol.color()
+                    notes += builders.add_boundary(self.ren, data.read_boundary(lb, lr.crs()), surface, info, self.sp_ve.value(),
+                                                   {"colour": (cb_.redF(), cb_.greenF(), cb_.blueF()),
+                                                    "width": self.sp_bwidth.value(), "lift": self.sp_blift.value()}, registry)
+                except Exception:
+                    notes.append("The site boundary could not be drawn:\n" + traceback.format_exc(limit=2))
+        self._fill_lith_table(info.get("codes") or {})
         if use_model:
-            notes += builders.add_model(self.ren, self.model, info, self.sp_ve.value(), nz=int(self.sp_nz.value()),
-                                        cuts=self._block_cuts(), registry=registry)
+            notes += builders.add_model(self.ren, self._model_draw, info, self.sp_ve.value(), nz=int(self.sp_nz.value()),
+                                        cuts=self._block_cuts(), registry=registry, smooth=self.sp_msm.value())
             if self.fence:
-                notes += builders.add_fence(self.ren, self.model, info, self.sp_ve.value(), self.fence, registry=registry)
+                notes += builders.add_fence(self.ren, self._model_draw, info, self.sp_ve.value(), self.fence, registry=registry)
         if lg is not None:
             if not (self.f_gwz.currentField() or self.f_gwd.currentField()):
                 notes.append("Groundwater: choose the water-level or the depth-to-water column (Surfaces section).")
@@ -2640,6 +2909,9 @@ class SubsurfaceDock(QDockWidget):
         builders.add_axes(self.ren, info, bgt, registry)
         self._refresh_layers(registry)
         self._registry = registry
+        for e_ in registry:
+            if e_["name"] == "Borehole labels":
+                builders.restyle_hole_labels(e_, self._hlabel_opts(), builders.theme_fg(bgt), self.vtk_widget.devicePixelRatioF())
         builders.reset_camera(self.ren)
         if restore:
             self._apply_camera(info)
@@ -2730,13 +3002,18 @@ class SubsurfaceDock(QDockWidget):
         except Exception:
             self.say("Could not build the model:\n" + traceback.format_exc(limit=3), warn=True)
 
+    def _mdl_view(self):
+        """The model as drawn (unit tops clipped to the DEM); the plain model if nothing was drawn yet."""
+        md = getattr(self, "_model_draw", None)
+        return md if (self.model is not None and md is not None) else self.model
+
     def _update_block(self):
         """Rebuilds only the block model (after a cut slider or the depth cells changed)."""
         if (self.vtk_widget is None or self.model is None or self._block_entry is None
                 or not self._last_info or "origin" not in self._last_info):
             return
         info = self._last_info
-        new = builders.make_block_actor(self.model, info, info["ve"], int(self.sp_nz.value()), self._block_cuts(), info.get("codes"))
+        new = builders.make_block_actor(self._mdl_view(), info, info["ve"], int(self.sp_nz.value()), self._block_cuts(), info.get("codes"))
         st = self.layer_state.get("Block model", {})
         new.SetVisibility(1 if st.get("visible", False) else 0)
         new.GetProperty().SetOpacity(1.0 - st.get("transp", 0) / 100.0)
@@ -2773,13 +3050,13 @@ class SubsurfaceDock(QDockWidget):
     # ------------------------------------------------------------ save / open a setup
     def _setup_items(self):
         return {
-            "layers": {"collar": self.cb_collar, "lith": self.cb_lith, "raster": self.cb_raster, "plume": self.cb_plume, "gw": self.cb_gw, "gwr": self.cb_gwr, "drape": self.cb_drape},
+            "layers": {"collar": self.cb_collar, "lith": self.cb_lith, "raster": self.cb_raster, "plume": self.cb_plume, "gw": self.cb_gw, "gwr": self.cb_gwr, "drape": self.cb_drape, "bound": self.cb_bound},
             "fields": {"c_id": self.f_cid, "c_z": self.f_cz, "c_d": self.f_cd, "l_id": self.f_lid,
                        "l_from": self.f_lfrom, "l_to": self.f_lto, "l_code": self.f_lcode,
                        "p_z": self.f_pz, "p_c": self.f_pc, "gw_id": self.f_gwid, "gw_z": self.f_gwz, "gw_d": self.f_gwd,
                        "gr_id": self.f_gri, "gr_top": self.f_grt, "gr_bot": self.f_grb, "gr_c": self.f_grc},
             "values": {"ve": self.sp_ve, "rad": self.sp_rad, "prad": self.sp_prad, "iso": self.sp_iso, "infl": self.sp_infl,
-                       "mn": self.sp_mn, "mm": self.sp_mm, "nz": self.sp_nz, "gwint": self.sp_gwint, "gwlab": self.sp_gwlab, "gwm": self.sp_gwm, "drape_px": self.sp_drape},
+                       "mn": self.sp_mn, "mm": self.sp_mm, "nz": self.sp_nz, "gwint": self.sp_gwint, "gwlab": self.sp_gwlab, "gwm": self.sp_gwm, "drape_px": self.sp_drape, "demoff": self.sp_demoff, "bwidth": self.sp_bwidth, "blift": self.sp_blift, "msm": self.sp_msm, "mhm": self.sp_mhm, "modgap": self.sp_modgap},
         }
 
     def save_setup(self):
@@ -2814,10 +3091,13 @@ class SubsurfaceDock(QDockWidget):
             "shells": {"on": self.chk_shells.isChecked(), "mult": self.ed_mult.text(), "colours": self.cmb_shellcol.currentData(),
                        "mode": self.cmb_shellmode.currentData(),
                        "texts": dict(self._mult_texts, **{self.cmb_shellmode.currentData(): self.ed_mult.text()})},
+            "cap_faces": self.chk_cap.isChecked(), "cut_colour": self.chk_cutcol.isChecked(),
+            "plume_display": {"mode": self.cmb_pdisp.currentData(), "density": self.sp_cdens.value()},
+            "fade": {"on": self.chk_fade.isChecked(), "dist": self.sp_fadedist.value(), "strength": self.sp_fadestr.value()},
             "plume_method": self.cmb_pmethod.currentData(),
             "gw_method": self.cmb_gwmethod.currentData(),
             "plume_opts": {"detail": self.sp_pdetail.value(), "smooth": self.sp_psmooth.value(), "zaniso": self.sp_pz.value(),
-                           "clip": self.chk_clip.isChecked(), "above_water": self.chk_water.isChecked(),
+                           "clip": self.chk_clip.isChecked(), "model_hull": self.chk_mhull.isChecked(), "above_water": self.chk_water.isChecked(),
                            "hull": self.chk_hull.isChecked(), "hull_buffer": self.sp_hullbuf.value()},
             "plume_legend": {"name": self.ed_pname.text(), "unit": self.ed_punit.text(), "name_auto": self._pname_auto},
             "text_boxes": self._tb,
@@ -2826,6 +3106,8 @@ class SubsurfaceDock(QDockWidget):
             "gw_bottom": {"on": self.chk_gbottom.isChecked(), "extra": self.sp_gbuf.value()},
             "volume": {"guideline": self.sp_vguide.value(), "porosity": self.sp_vpor.value()},
             "plume_labels": self._plabel_opts(),
+            "hole_labels": self._hlabel_opts(),
+            "boundary_colour": self.btn_bcol.color().name(),
             "plume_legend_style": self._blegend_opts(),
         }
         try:
@@ -2940,6 +3222,7 @@ class SubsurfaceDock(QDockWidget):
             self.sp_psmooth.setValue(float(po.get("smooth", 3)))
             self.sp_pz.setValue(float(po.get("zaniso", 3)))
             self.chk_clip.setChecked(bool(po.get("clip", True)))
+            self.chk_mhull.setChecked(bool(po.get("model_hull", True)))
             self.chk_water.setChecked(bool(po.get("above_water", True)))
             self.chk_hull.setChecked(bool(po.get("hull", False)))
             self.sp_hullbuf.setValue(float(po.get("hull_buffer", 20)))
@@ -2968,6 +3251,22 @@ class SubsurfaceDock(QDockWidget):
                 self.btn_blcol.setColor(QColor(int(c[0] * 255), int(c[1] * 255), int(c[2] * 255)))
                 self.chk_blbg.setChecked(bool(pb.get("background", False)))
                 self.chk_blborder.setChecked(bool(pb.get("border", False)))
+            if cfg.get("boundary_colour"):
+                self.btn_bcol.setColor(QColor(cfg["boundary_colour"]))
+            hf = cfg.get("hole_labels") or {}
+            if hf:
+                self.sp_hlsize.setValue(float(hf.get("size", 13)))
+                self.cmb_hlcol.setCurrentIndex(max(self.cmb_hlcol.findData(hf.get("mode", "auto")), 0))
+                c = hf.get("colour", (0, 0, 0))
+                self.btn_hlcol.setColor(QColor(int(c[0] * 255), int(c[1] * 255), int(c[2] * 255)))
+                self.cmb_hlfont.setCurrentIndex(max(self.cmb_hlfont.findData(hf.get("font", "arial")), 0))
+                self.chk_hlbold.setChecked(bool(hf.get("bold", True)))
+                self.chk_hlital.setChecked(bool(hf.get("italic", False)))
+                self.chk_hlbg.setChecked(bool(hf.get("background", True)))
+                self.chk_hldecl.setChecked(bool(hf.get("declutter", True)))
+                k_ = float(hf.get("offset", 1.0))          # older setups stored one distance
+                self.sp_hlx.setValue(float(hf.get("dx", 6.0 * k_)))
+                self.sp_hly.setValue(float(hf.get("dy", 6.0 * k_)))
             pf = cfg.get("plume_labels") or {}
             if pf:
                 self.sp_plsize.setValue(float(pf.get("size", 13)))
@@ -2980,6 +3279,17 @@ class SubsurfaceDock(QDockWidget):
                 self.sp_pldec.setValue(float(pf.get("decimals", 2)))
                 self.chk_plbg.setChecked(bool(pf.get("background", True)))
                 self.sp_ploff.setValue(float(pf.get("offset", 1.0)))
+                self.chk_pldecl.setChecked(bool(pf.get("declutter", True)))
+            self.chk_cap.setChecked(bool(cfg.get("cap_faces", True)))
+            self.chk_cutcol.setChecked(bool(cfg.get("cut_colour", True)))
+            pdc = cfg.get("plume_display") or {}
+            self.cmb_pdisp.setCurrentIndex(max(self.cmb_pdisp.findData(pdc.get("mode", "shells")), 0))
+            self.sp_cdens.setValue(float(pdc.get("density", 80.0)))
+            fdc = cfg.get("fade")
+            if fdc:
+                self.chk_fade.setChecked(bool(fdc.get("on", True)))
+                self.sp_fadedist.setValue(float(fdc.get("dist", 0.0)))
+                self.sp_fadestr.setValue(float(fdc.get("strength", 60.0)))
             sh = cfg.get("shells")
             if sh:
                 self.chk_shells.setChecked(bool(sh.get("on", True)))
@@ -3010,7 +3320,7 @@ class SubsurfaceDock(QDockWidget):
             vo = cfg.get("volume") or {}
             self.sp_vguide.setValue(float(vo.get("guideline", 0.0)))
             self.sp_vpor.setValue(float(vo.get("porosity", 0.30)))
-            ix = self.cmb_interp.findData(cfg.get("interpolation", "linear"))
+            ix = self.cmb_interp.findData(cfg.get("interpolation", "kriging"))
             if ix >= 0:
                 self.cmb_interp.setCurrentIndex(ix)
             if cfg.get("chronology"):
@@ -3164,7 +3474,7 @@ class SubsurfaceDock(QDockWidget):
                     "plume_ramp": self.cmb_shellcol.currentData(),
                     "plume_title": self.plume_title(), "plume_hull": self._hull_spec(collars, plume)}
             self._ensure_section_canvas()
-            notes = section.make_section(self.sec_fig, pts, collars, intervals, plume, self.model, codes, opts)
+            notes = section.make_section(self.sec_fig, pts, collars, intervals, plume, self._mdl_view(), codes, opts)
             self.sec_canvas.draw()
             self.say("\n".join(notes))
         except Exception:
@@ -3203,6 +3513,16 @@ class SubsurfaceDock(QDockWidget):
             self.cb_plume.setLayer(p)
         self.say("Prepared layers selected. Click Update model.")
 
+    def _demo_look(self):
+        """The demo opens with vertical exaggeration 3 and a 'Demo Model' title in the corner."""
+        self.sp_ve.setValue(3.0)
+        if not any((tb.get("text") or "").strip() == "Demo Model" for tb in self._tb):
+            tb = self._tb_default()
+            tb.update({"text": "Demo Model", "size": 18.0, "anchor": "top_left", "ny": -12.0})
+            self._tb.append(tb)
+            self._tb_fill_list(len(self._tb) - 1)
+            self._tb_sync()
+
     def make_demo20(self):
         try:
             proj = QgsProject.instance()
@@ -3222,6 +3542,7 @@ class SubsurfaceDock(QDockWidget):
             self.cb_gw.setLayer(gwl)
             self.cb_gwr.setLayer(gwr)
             self.cb_drape.setLayer(sat)
+            self._demo_look()
             self.say("Demo with 20 wells at random places added. Click Update model, then Load units and Build Model.")
         except Exception:
             self.say("Could not create the 20-well demo:\n" + traceback.format_exc(limit=3), warn=True)
@@ -3255,6 +3576,7 @@ class SubsurfaceDock(QDockWidget):
             self.cb_lith.setLayer(lith)
             self.cb_raster.setLayer(dem)
             self.cb_plume.setLayer(plume)
+            self._demo_look()
             self.say("Demo layers added. Click Update model.")
         except Exception:
             self.say("Could not create demo data:\n" + traceback.format_exc(limit=3), warn=True)

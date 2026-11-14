@@ -149,3 +149,32 @@ def read_gw_results(layer, f_id, f_top, f_bot, f_conc, collars):
         rows.append((xy[0], xy[1], gz - top, gz - bot, c, hid))
         nd.append(v.startswith("nd") or v.startswith("no") or v.startswith("<"))
     return rows, nd, skipped
+
+
+def read_boundary(layer, dest_crs=None):
+    """Outlines of a polygon or line layer as a list of (n, 2) arrays (polygon rings and lines), in dest_crs."""
+    from qgis.core import Qgis, QgsCoordinateTransform, QgsGeometry, QgsProject
+    tr = None
+    if dest_crs is not None and dest_crs.isValid() and layer.crs().isValid() and layer.crs() != dest_crs:
+        tr = QgsCoordinateTransform(layer.crs(), dest_crs, QgsProject.instance())
+    parts = []
+    for f in layer.getFeatures():
+        g = f.geometry()
+        if g is None or g.isNull() or g.isEmpty():
+            continue
+        if tr is not None:
+            g = QgsGeometry(g)
+            if g.transform(tr) != Qgis.GeometryOperationResult.Success:
+                continue
+        gt = g.type()
+        if gt == Qgis.GeometryType.Polygon:
+            polys = g.asMultiPolygon() if g.isMultipart() else [g.asPolygon()]
+            rings = [r for poly in polys for r in poly]
+        elif gt == Qgis.GeometryType.Line:
+            rings = g.asMultiPolyline() if g.isMultipart() else [g.asPolyline()]
+        else:
+            continue
+        for r in rings:
+            if len(r) >= 2:
+                parts.append(np.array([[p.x(), p.y()] for p in r], dtype=float))
+    return parts

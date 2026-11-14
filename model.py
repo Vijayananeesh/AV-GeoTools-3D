@@ -153,7 +153,7 @@ def default_order(collars, intervals):
     return sorted(tops, key=lambda u: -float(np.mean(tops[u])))
 
 
-def build_model(collars, intervals, order, nx=50, ny=50, margin=0.1, method="linear"):
+def build_model(collars, intervals, order, nx=50, ny=50, margin=0.1, method="kriging"):
     """Returns (model dict or None, list of notes).
 
     collars: {hole: (x, y, ground_z, depth_or_None)}, intervals: {hole: [(from, to, unit)]}, order: top to bottom.
@@ -162,7 +162,7 @@ def build_model(collars, intervals, order, nx=50, ny=50, margin=0.1, method="lin
     """
     notes = []
     warn = set()
-    method = method if method in METHODS else "linear"
+    method = method if method in METHODS else "kriging"
     idx = {u: i for i, u in enumerate(order)}
     holes, late, flipped, unknown = [], [], [], set()
     for h, (x, y, z, depth) in collars.items():
@@ -250,3 +250,85 @@ def build_model(collars, intervals, order, nx=50, ny=50, margin=0.1, method="lin
     model = dict(units=units, xs=xs, ys=ys, dx=dx, dy=dy, tops=tops, thick=thick, zbot=float(zbot),
                  vol=vol, mean_t=mean_t, n_holes=len(holes), method=method)
     return model, notes
+
+
+def clip_to_surface(model, surface, gap=0.0):
+    """Returns a copy of the model whose unit tops never rise above the ground surface (DEM).
+    surface = (xs, ys, grid[ny, nx]). Thickness is recomputed so solids, contacts, blocks and fence stay consistent."""
+    if model is None or surface is None:
+        return model
+    try:
+        from scipy.interpolate import RegularGridInterpolator
+        sx, sy, sz = np.asarray(surface[0], float), np.asarray(surface[1], float), np.asarray(surface[2], float)
+        if sz.shape != (len(sy), len(sx)):
+            sz = sz.T if sz.T.shape == (len(sy), len(sx)) else sz
+        if sz.shape != (len(sy), len(sx)) or len(sx) < 2 or len(sy) < 2:
+            return model
+        if sx[0] > sx[-1]:
+            sx, sz = sx[::-1], sz[:, ::-1]
+        if sy[0] > sy[-1]:
+            sy, sz = sy[::-1], sz[::-1, :]
+        f = RegularGridInterpolator((sy, sx), sz, bounds_error=False, fill_value=None, method="linear")
+        X, Y = np.meshgrid(model["xs"], model["ys"])
+        dem = f(np.column_stack([Y.ravel(), X.ravel()])).reshape(X.shape)
+        dem = np.where(np.isfinite(dem), dem - max(gap, 0.0), np.inf)
+    except Exception:
+        return model
+    tops = np.minimum(model["tops"], dem[None])
+    n = tops.shape[0]
+    thick = np.zeros_like(tops)
+    for k in range(n - 1):
+        thick[k] = np.clip(tops[k] - tops[k + 1], 0.0, None)
+    thick[n - 1] = np.clip(tops[n - 1] - model["zbot"], 0.0, None)
+    out = dict(model)
+    out["tops"], out["thick"] = tops, thick
+    out["vol"] = [float(thick[k].sum() * model["dx"] * model["dy"]) for k in range(n)]
+    out["mean_t"] = [float(thick[k].mean()) for k in range(n)]
+    return out
+
+
+def limit_to_hull(model, xy, margin=0.0):
+    """Returns a copy of the model carrying the outline (convex hull of the borehole positions xy, pushed out
+    by `margin` metres). The drawing code then cuts everything exactly along vertical planes through that outline."""
+    xy = np.asarray(xy, float).reshape(-1, 2)
+    if model is None or len(xy) < 3:
+        return model
+    try:
+        from scipy.spatial import ConvexHull
+        v = xy[ConvexHull(xy).vertices]            # counter-clockwise
+    except Exception:
+        return model
+    out = dict(model)
+    out["hull"] = (v, float(max(margin, 0.0)))
+    X, Y = np.meshgrid(model["xs"], model["ys"])
+    inside = hull_inside(out, X.ravel(), Y.ravel()).reshape(X.shape)
+    out["vol"] = [float(model["thick"][k][inside].sum() * model["dx"] * model["dy"]) for k in range(len(model["units"]))]
+    out["mean_t"] = [float(model["thick"][k][inside].mean()) if inside.any() else 0.0 for k in range(len(model["units"]))]
+    return out
+
+
+def hull_edges(model):
+    """Edges of the outline as (point on edge, inward unit normal) pairs, already pushed out by the margin."""
+    h = model.get("hull") if model else None
+    if not h:
+        return []
+    v, margin = np.asarray(h[0], float), float(h[1])
+    res = []
+    for i in range(len(v)):
+        a, b = v[i], v[(i + 1) % len(v)]
+        e = b - a
+        L = float(np.hypot(e[0], e[1]))
+        if L <= 0:
+            continue
+        n = np.array([-e[1], e[0]]) / L
+        res.append((a - n * margin, n))
+    return res
+
+
+def hull_inside(model, x, y, tol=1e-3):
+    """True where (x, y) lies inside the outline (everywhere when the model has none)."""
+    x = np.asarray(x, float)
+    ok = np.ones(x.shape, bool)
+    for p0, n in hull_edges(model):
+        ok &= ((x - p0[0]) * n[0] + (np.asarray(y, float) - p0[1]) * n[1]) >= -tol
+    return ok

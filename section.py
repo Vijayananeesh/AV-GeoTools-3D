@@ -48,6 +48,9 @@ def sample_model(model, x, y):
     out = np.empty((len(model["units"]), len(x)))
     for k in range(len(model["units"])):
         out[k] = RegularGridInterpolator((ys, xs), model["tops"][k])(q)
+    if model.get("hull"):
+        from . import model as _m
+        inside = inside & _m.hull_inside(model, x, y)
     out[:, ~inside] = np.nan
     return out
 

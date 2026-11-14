@@ -2,10 +2,9 @@
 name=AV GeoTools 3D
 qgisMinimumVersion=4.0
 qgisMaximumVersion=4.99
-supportsQt6=True
 description=Interactive 3D visualisation of boreholes, lithology, surfaces and soil / groundwater contaminant plumes, with plume volumes above a guideline value
 about=AV GeoTools 3D turns site-investigation data in QGIS into an interactive 3D model (VTK). It draws boreholes with lithology, a DEM with optional satellite image draped on it, groundwater surfaces and contours, geological models, fence diagrams and cut-away views. Soil results (one depth per sample) and groundwater results (screened intervals) are interpolated (kriging or inverse distance) into nested 3D plume shells, limited by the ground, the water table, the well bottoms and the well area. The volume of a plume above a guideline value is calculated in total and per lithology unit. Models can be exported as a stand-alone interactive web page (HTML), and a data-preparation tool turns Excel / CSV tables into QGIS layers. Needs the VTK, numpy and scipy modules that ship with the standard QGIS installer.
-version=0.1.3
+version=0.4.9
 author=Aneesh Vijayan
 email=krishnanvijayananeesh@gmail.com
 category=Analysis
@@ -14,9 +13,46 @@ tags=3d,subsurface,borehole,lithology,plume,groundwater,geology,contamination,pf
 homepage=https://github.com/Vijayananeesh/AV-GeoTools-3D
 tracker=https://github.com/Vijayananeesh/AV-GeoTools-3D/issues
 repository=https://github.com/Vijayananeesh/AV-GeoTools-3D
-experimental=True
+experimental=False
 deprecated=False
-changelog=0.1.3 - Save and Save as buttons, the title bar shows the setup file in use, New button to start a fresh scene, AI-assistance note in the README.
+changelog=
+    0.4.9 - Internal clean-up: problems are now written to the QGIS log instead of being silently ignored.
+      0.4.8 - Metadata cleaned up: removed a deprecated Qt6 flag; QGIS 4 compatibility is set by the maximum QGIS version (4.99).
+  0.4.7 - First stable release (no longer marked experimental). Needs the Python package vtk: if missing, run  python -m pip install vtk  in the OSGeo4W Shell.
+  0.4.6 - 'Report this problem by e-mail' and 'Copy details' buttons on error messages (user name removed, versions included).
+  0.4.5 - Fixed: the Cloud plume display failed with a NameError (the cloud routine had gone missing). Restored.
+  0.4.4 - Works with newer VTK versions that no longer have AddActor2D (uses AddViewProp).
+  0.4.3 - A clear message with the fix when the Python package vtk (or scipy, numpy) is missing.
+  0.4.2 - Cut-away also hides the groundwater contour labels on the cut side.
+  0.4.1 - Cut-away also hides the labels (borehole names, result labels) on the cut side; they can be ticked in 'Layers included in the cut'.
+  0.4.0 - Site boundary (polygon or line layer) can be draped on the DEM surface; colour, width and lift settings; saved in setups.
+  0.3.9 - Cut-away section moved between Plumes and Tools.
+  0.3.8 - The demo opens with vertical exaggeration 3 and a 'Demo Model' title text box.
+  0.3.7 - Plumes tab: 'Samples and their results' is its own group between Data and Estimation between samples.
+  0.3.6 - Plumes tab: 'Samples and their results' now sits inside the Data group.
+  0.3.5 - Borehole names: separate horizontal and vertical offset (px, plus or minus).
+  0.3.4 - Borehole names can be styled: size, font, colour, bold, italic, background, distance, overlap hiding (live, saved in setups).
+  0.3.3 - Geology outline cut: solids are cut as volumes, so they stay watertight with no gaps where thin units (e.g. silty sand) meet the wall.
+  0.3.2 - The chosen Light/Dark theme is remembered when the plugin is reopened.
+  0.3.1 - Kriging is the default interpolation everywhere (geology model too).
+  0.3.0 - Lists and text boxes in the panel (e.g. the chronology) are readable in light mode.
+  0.2.9 - Geology outline cut is now exact: vertical walls along the convex hull of the boreholes (solids stay closed, margin moves the walls).
+  0.2.8 - Geology limited to the convex hull of the boreholes (option and margin in Model settings).
+  0.2.7 - Smoother geology solids (setting 'Smooth geology solids'; layer order kept, cut faces still capped).
+  0.2.6 - DEM height adjustment (up/down) and a 'keep geology below the DEM by' gap; fixed an error when building the model.
+  0.2.5 - The geology model (solids, contacts, block model, fence, section) is cut at the DEM, so it never rises above the ground surface.
+  0.2.4 - Hole names tidied like the result labels, axis numbers in full and smaller, styled tabs, smoother edges (FXAA).
+  0.2.3 - Polish: collapsed boxes as plain title lines, smaller legend and label defaults, colour bar title on two lines, overlapping result labels hidden (option).
+  0.2.2 - Modern look for the toolbar too (rounded buttons, blue Update model button).
+  0.2.1 - Modern look for the left panel (soft cards, rounded boxes, blue accent, light and dark); switch under Tools > Look.
+  0.2.0 - Closed plume shells (not hollow where cut) with coloured cross-section cut faces; option to switch off.
+  0.1.9 - Cloud fixed (no more solid blue box); the cloud follows the shell levels, lowest value, smoothing, fade and density.
+  0.1.8 - New plume display: Cloud (smooth volume rendering) next to the nested shells, soil and groundwater.
+  0.1.7 - Plume shells are closed where they are cut (ground, water table, well bottoms, hull) instead of hollow; tick box to switch off.
+  0.1.6 - Fix: plume could fail to draw when a shell contained invalid points (fade).
+  0.1.5 - Plume shells fade with distance from the nearest sample (confidence cue), soil and groundwater.
+  0.1.4 - Lithology log on the borehole tubes now shows sharp boundaries between units (colours were blended).
+  0.1.3 - Save and Save as buttons, the title bar shows the setup file in use, New button to start a fresh scene, AI-assistance note in the README.
   0.1.2 - Contact email corrected.
   0.1.1 - Security scan fixes: no silent error handling (errors are now logged). 2D View and Tables tabs start closed.
   0.1.0 - First release: 3D boreholes and lithology, DEM with satellite drape, groundwater surface, geological model, fence diagram, cut-away, soil and groundwater plumes, plume volume above a guideline, text boxes, HTML export, data preparation from Excel / CSV.
